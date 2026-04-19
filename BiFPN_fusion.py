@@ -13,5 +13,5 @@ class FastNormalizedFusion(nn.Module):
     def forward(self, *features: torch.Tensor):
         assert len(features) == self.num_inputs
         w = F.relu(self.w)
-        fused = sum(w[i] * features[i] for i in range(self.num_inputs)) / (w.sum() + self.epsilon)
+        fused = sum([w[i] * features[i] for i in range(self.num_inputs)]) / (w.sum() + self.epsilon)
         return fused
