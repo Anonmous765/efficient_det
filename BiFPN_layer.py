@@ -6,6 +6,8 @@ from Depthwise_convolution import DepthwiseSeparableConv
 
 
 class TopDownNodes(nn.Module):
+    """Top-down pathway of a BiFPN layer: fuses P7->P6->P5->P4 via weighted addition and upsampling."""
+
     def __init__(self, out_channels: int):
         super().__init__()
 
@@ -22,3 +24,29 @@ class TopDownNodes(nn.Module):
         p5_td = self.p5_td_conv(self.p5_td_fuse(p5, F.interpolate(p6_td, size=p5.shape[-2:], mode='nearest')))
         p4_td = self.p4_td_conv(self.p4_td_fuse(p4, F.interpolate(p5_td, size=p4.shape[-2:], mode='nearest')))
         return p3, p4, p5, p6, p7, p4_td, p5_td, p6_td
+
+class OutNodes(nn.Module):
+    """Bottom-up output pathway of a BiFPN layer: combines original and top-down features to produce P3-P7 outputs."""
+
+    def __init__(self, out_channels: int):
+        super().__init__()
+
+        self.p3_out_fuse = FastNormalizedFusion(num_inputs=2)
+        self.p4_out_fuse = FastNormalizedFusion(num_inputs=3)
+        self.p5_out_fuse = FastNormalizedFusion(num_inputs=3)
+        self.p6_out_fuse = FastNormalizedFusion(num_inputs=3)
+        self.p7_out_fuse = FastNormalizedFusion(num_inputs=2)
+
+        self.p3_out_conv = DepthwiseSeparableConv(out_channels, out_channels)
+        self.p4_out_conv = DepthwiseSeparableConv(out_channels, out_channels)
+        self.p5_out_conv = DepthwiseSeparableConv(out_channels, out_channels)
+        self.p6_out_conv = DepthwiseSeparableConv(out_channels, out_channels)
+        self.p7_out_conv = DepthwiseSeparableConv(out_channels, out_channels)
+
+    def forward(self, p3, p4, p5, p6, p7, p4_td, p5_td, p6_td):
+        p3_out = self.p3_out_conv(self.p3_out_fuse(p3, F.interpolate(p4_td, size=p3.shape[-2:], mode='nearest')))
+        p4_out = self.p4_out_conv(self.p4_out_fuse(p4, p4_td, F.max_pool2d(p3_out, kernel_size=2, stride=2)))
+        p5_out = self.p5_out_conv(self.p5_out_fuse(p5, p5_td, F.max_pool2d(p4_out, kernel_size=2, stride=2)))
+        p6_out = self.p6_out_conv(self.p6_out_fuse(p6, p6_td, F.max_pool2d(p5_out, kernel_size=2, stride=2)))
+        p7_out = self.p7_out_conv(self.p7_out_fuse(p7, F.max_pool2d(p6_out, kernel_size=2, stride=2)))
+        return p3_out, p4_out, p5_out, p6_out, p7_out

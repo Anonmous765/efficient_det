@@ -1,8 +1,8 @@
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 class DepthwiseSeparableConv(nn.Module):
+    """Depthwise separable convolution: depthwise 3x3 -> pointwise 1x1 -> BN -> SiLU."""
+
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.in_channels = in_channels
