@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from BiFPN_fusion import FastNormalizedFusion
 from Depthwise_convolution import DepthwiseSeparableConv
-
+from EfficientDet_Backbone import EfficientDetConfig
 
 class TopDownNodes(nn.Module):
     """Top-down pathway of a BiFPN layer: fuses P7->P6->P5->P4 via weighted addition and upsampling."""
@@ -50,3 +50,28 @@ class OutNodes(nn.Module):
         p6_out = self.p6_out_conv(self.p6_out_fuse(p6, p6_td, F.max_pool2d(p5_out, kernel_size=2, stride=2)))
         p7_out = self.p7_out_conv(self.p7_out_fuse(p7, F.max_pool2d(p6_out, kernel_size=2, stride=2)))
         return p3_out, p4_out, p5_out, p6_out, p7_out
+
+
+class BiFPN_layer(nn.Module):
+    def __init__(self, out_channels: int):
+        super().__init__()
+        self.TopDownNodes = TopDownNodes(out_channels)
+        self.OutNodes = OutNodes(out_channels)
+
+    def forward(self, p3, p4, p5, p6, p7):
+        p3, p4, p5, p6, p7, p4_td, p5_td, p6_td = self.TopDownNodes(p3, p4, p5, p6, p7)
+        p3_out, p4_out, p5_out, p6_out, p7_out = self.OutNodes(p3, p4, p5, p6, p7, p4_td, p5_td, p6_td)
+        return p3_out, p4_out, p5_out, p6_out, p7_out
+
+class BiFPN(nn.Module):
+    def __init__(self, config: EfficientDetConfig):
+        super().__init__()
+        self.BiFPN_layers = nn.ModuleList(
+            [BiFPN_layer(config.out_channels) for _ in range(config.num_bifpn_layers)]
+        )
+
+    def forward(self, p3, p4, p5, p6, p7):
+        for layer in self.BiFPN_layers:
+            p3, p4, p5, p6, p7 = layer(p3, p4, p5, p6, p7)
+
+        return p3, p4, p5, p6, p7
