@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
-from torch import functional as F
-from EfficientDet_Backbone import EfficientDetConfig
 from Depthwise_convolution import DepthwiseSeparableConv
+from EfficientDet_Backbone import EfficientDetConfig
 
 
 class ClassificationHead(nn.Module):
