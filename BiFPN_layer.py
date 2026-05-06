@@ -75,3 +75,23 @@ class BiFPN(nn.Module):
             p3, p4, p5, p6, p7 = layer(p3, p4, p5, p6, p7)
 
         return p3, p4, p5, p6, p7
+
+
+if __name__ == '__main__':
+    import torch
+    config = EfficientDetConfig(phi=0)
+    model = BiFPN(config)
+
+    # Dummy feature maps matching EfficientDet-D0 backbone output at 512×512 input
+    # P3..P7 all share out_channels=64; spatial sizes halve with each level
+    dummy_inputs = [
+        torch.randn(1, config.out_channels, 512 // (2 ** s), 512 // (2 ** s))
+        for s in range(3, 8)   # strides 8, 16, 32, 64, 128
+    ]
+    p3, p4, p5, p6, p7 = dummy_inputs
+
+    p3_out, p4_out, p5_out, p6_out, p7_out = model(p3, p4, p5, p6, p7)
+
+    for name, feat in zip(['P3', 'P4', 'P5', 'P6', 'P7'],
+                          [p3_out, p4_out, p5_out, p6_out, p7_out]):
+        print(f"{name}: {tuple(feat.shape)}")
