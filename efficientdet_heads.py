@@ -24,7 +24,7 @@ class ClassificationHead(nn.Module):
         self.bn = nn.ModuleList([
             nn.ModuleList([
                 nn.BatchNorm2d(out_channels, momentum=0.01, eps=1e-3)
-                for _ in range(num_head_layers)
+                for _ in range(num_head_layers)  
             ])
             for _ in range(5)
         ])
