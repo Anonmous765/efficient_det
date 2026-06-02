@@ -29,6 +29,7 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+testing.ipynb
 
 # Logs and local environment files
 *.log

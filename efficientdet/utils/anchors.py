@@ -1,4 +1,6 @@
 import math
+from typing import Dict, List, Tuple, Union
+
 import torch
 import torch.nn as nn
 
@@ -6,11 +8,11 @@ import torch.nn as nn
 class AnchorGenerator(nn.Module):
     def __init__(
         self,
-        scales=(1.0, 2**(1/3), 2**(2/3)),
-        aspect_ratios=(0.5, 1.0, 2.0),
-        anchor_scale=4.0,
-        strides=(8, 16, 32, 64, 128),
-    ):
+        scales: Tuple[float, ...] = (1.0, 2**(1/3), 2**(2/3)),
+        aspect_ratios: Tuple[float, ...] = (0.5, 1.0, 2.0),
+        anchor_scale: float = 4.0,
+        strides: Tuple[int, ...] = (8, 16, 32, 64, 128),
+    ) -> None:
         super().__init__()
         self.scales = scales
         self.aspect_ratios = aspect_ratios
@@ -21,9 +23,9 @@ class AnchorGenerator(nn.Module):
         self._base_anchors = self._make_base_anchors()
 
         # Cache: maps (H, W, device_str) → anchor tensor
-        self._cache = {}
+        self._cache: Dict[Tuple[Tuple[Tuple[int, int], ...], str], torch.Tensor] = {}
 
-    def _make_base_anchors(self):
+    def _make_base_anchors(self) -> torch.Tensor:
         """
         Returns tensor of shape (num_anchors, 2) = (9, 2).
         Each row is (w_multiplier, h_multiplier).
@@ -37,7 +39,7 @@ class AnchorGenerator(nn.Module):
                 anchors.append((w, h))
         return torch.tensor(anchors, dtype=torch.float32)
 
-    def _anchors_for_level(self, H, W, stride, device):
+    def _anchors_for_level(self, H: int, W: int, stride: int, device: Union[str, torch.device]) -> torch.Tensor:
         """Returns (H * W * num_anchors, 4) in (cx, cy, w, h) format."""
         base_size = stride * self.anchor_scale
 
@@ -62,7 +64,7 @@ class AnchorGenerator(nn.Module):
         return torch.stack([cx, cy, w, h], dim=-1).reshape(-1, 4)
 
     @torch.no_grad()
-    def forward(self, feature_map_sizes, device='cpu'):
+    def forward(self, feature_map_sizes: List[Tuple[int, int]], device: Union[str, torch.device] = 'cpu') -> torch.Tensor:
         """
         Args:
             feature_map_sizes: list of (H_i, W_i) for each pyramid level
