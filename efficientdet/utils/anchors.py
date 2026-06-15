@@ -45,7 +45,7 @@ class AnchorGenerator(nn.Module):
 
         shifts_x = (torch.arange(W, dtype=torch.float32, device=device) + 0.5) * stride
         shifts_y = (torch.arange(H, dtype=torch.float32, device=device) + 0.5) * stride
-        grid_y, grid_x = torch.meshgrid(shifts_y, shifts_x, indexing='ij') # ij indexing means the first argument becomes the row (hence y is first). You could also use xy to get the same result.
+        grid_y, grid_x = torch.meshgrid(shifts_y, shifts_x, indexing='ij') # ij indexing means the first argument becomes the row (hence y is first). Match the (H, W) format.
         grid_x = grid_x.reshape(-1)
         grid_y = grid_y.reshape(-1)
 
