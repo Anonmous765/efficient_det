@@ -53,12 +53,12 @@ class AnchorGenerator(nn.Module):
         ws = base_size * base[:, 0]
         hs = base_size * base[:, 1]
 
-        num_locs = H * W
+        num_locs = H * W    # num_locs = number of locations
         num_anchors = len(self.scales) * len(self.aspect_ratios)
 
         cx = grid_x.unsqueeze(1).expand(num_locs, num_anchors)
         cy = grid_y.unsqueeze(1).expand(num_locs, num_anchors)
-        w = ws.unsqueeze(0).expand(num_locs, num_anchors) # num_locs = number of locations (H * W)
+        w = ws.unsqueeze(0).expand(num_locs, num_anchors)
         h = hs.unsqueeze(0).expand(num_locs, num_anchors)
 
         return torch.stack([cx, cy, w, h], dim=-1).reshape(-1, 4)

@@ -30,6 +30,8 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 testing.ipynb
+expand_example.py
+reshape_example.py
 
 # Logs and local environment files
 *.log
