@@ -32,7 +32,8 @@ htmlcov/
 testing.ipynb
 expand_example.py
 reshape_example.py
-
+demo_anchors_ops.py
+test_stack.py
 # Logs and local environment files
 *.log
 .env

@@ -56,7 +56,9 @@ class AnchorGenerator(nn.Module):
         num_locs = H * W    # num_locs = number of locations
         num_anchors = len(self.scales) * len(self.aspect_ratios)
 
-        cx = grid_x.unsqueeze(1).expand(num_locs, num_anchors)
+        # cx, cy become (num_locs, 1) -> (num_locs, num_anchors)
+        # w, h become (1, num_anchors) -> (num_locs, num_anchors)
+        cx = grid_x.unsqueeze(1).expand(num_locs, num_anchors) # center x
         cy = grid_y.unsqueeze(1).expand(num_locs, num_anchors)
         w = ws.unsqueeze(0).expand(num_locs, num_anchors)
         h = hs.unsqueeze(0).expand(num_locs, num_anchors)
