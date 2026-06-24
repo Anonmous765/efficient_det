@@ -47,3 +47,9 @@ testing/test_stack.py
 # OS-generated files
 .DS_Store
 Thumbs.db
+
+# Dataset, checkpoints, and exported logs
+coco/
+checkpoints/
+coco_det_results.json
+*.txt
