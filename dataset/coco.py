@@ -7,6 +7,7 @@ Returns per-sample:
     gt_labels: LongTensor[M]      0-indexed class ids
 """
 import os
+import random
 from PIL import Image
 
 import torch
@@ -17,21 +18,56 @@ from efficientdet.utils.box_ops import xyxy_to_cxcywh
 
 
 class CocoDataset(Dataset):
-    def __init__(self, root: str, ann_file: str, transforms=None):
+    def __init__(self, root: str, ann_file: str, transforms=None,
+                 split=None, test_fraction: float = 0.05, seed: int = 42,
+                 keep_empty: bool = False):
         """
         root     : directory containing the JPEG images
-                   (e.g.  coco/images/train2017)
+                   (e.g.  coco2017/train2017)
         ann_file : path to the COCO JSON annotation file
-                   (e.g.  coco/annotations/instances_train2017.json)
+                   (e.g.  coco2017/annotations/instances_train2017.json)
         transforms : optional Compose from dataset.transforms
+        keep_empty : if False (default) images with no annotations are dropped;
+                   if True they are kept and yielded as background/negative
+                   samples (zero boxes). Useful when the dataset deliberately
+                   includes "normal" images to suppress false positives.
+        split    : None  -> use every annotated image (e.g. the val2017 set)
+                   "train" -> all annotated images EXCEPT the held-out test slice
+                   "test"  -> only the held-out test slice
+                   The held-out slice is carved deterministically from the
+                   annotated images so that "train" and "test" are disjoint as
+                   long as test_fraction / seed match across callers.
+        test_fraction : fraction of annotated images reserved for the test split
+        seed     : RNG seed controlling which images land in the test slice
         """
         self.root = root
         self.transforms = transforms
         self.coco = COCO(ann_file)
 
-        # Keep only images that have at least one annotation
-        all_ids = list(self.coco.imgs.keys())
-        self.ids = [i for i in all_ids if len(self.coco.getAnnIds(imgIds=i)) > 0]
+        # Keep only images that have at least one annotation (sorted for a
+        # deterministic ordering independent of dict insertion order). When
+        # keep_empty is set, annotation-free images are retained as negatives.
+        if keep_empty:
+            all_ids = sorted(self.coco.imgs.keys())
+        else:
+            all_ids = sorted(
+                i for i in self.coco.imgs.keys()
+                if len(self.coco.getAnnIds(imgIds=i)) > 0
+            )
+
+        if split in ("train", "test"):
+            shuffled = all_ids[:]
+            random.Random(seed).shuffle(shuffled)
+            n_test = int(len(shuffled) * test_fraction)
+            test_ids = set(shuffled[:n_test])
+            if split == "test":
+                self.ids = [i for i in all_ids if i in test_ids]
+            else:  # "train"
+                self.ids = [i for i in all_ids if i not in test_ids]
+        elif split is None:
+            self.ids = all_ids
+        else:
+            raise ValueError(f"split must be None, 'train', or 'test', got {split!r}")
 
         # Build a contiguous 0-indexed label map from COCO category ids
         cat_ids = sorted(self.coco.getCatIds())

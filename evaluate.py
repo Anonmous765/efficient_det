@@ -1,10 +1,15 @@
 """
-COCO mAP evaluation for a trained EfficientDet checkpoint.
+COCO mAP evaluation (the "test" stage) for a trained EfficientDet checkpoint.
+
+By default this evaluates on the held-out test split carved out of train2017 —
+the same slice train.py excludes from training. test_fraction / split_seed must
+match the values used during training for the split to line up.
 
 Usage:
     python evaluate.py \
-        --val-images   coco/images/val2017 \
-        --val-ann      coco/annotations/instances_val2017.json \
+        --images       coco2017/train2017 \
+        --ann          coco2017/annotations/instances_train2017.json \
+        --split        test \
         --checkpoint   checkpoints/best.pth \
         --phi 0 \
         --batch-size 8 \
@@ -67,14 +72,23 @@ def run_evaluation(model, loader, dataset, device, score_thresh=0.05, iou_thresh
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--val-images",  default="coco/images/val2017")
-    p.add_argument("--val-ann",     default="coco/annotations/instances_val2017.json")
+    p.add_argument("--images",      default="coco2017/train2017")
+    p.add_argument("--ann",         default="coco2017/annotations/instances_train2017.json")
+    p.add_argument("--split",       default="test", choices=["test", "train", "all"],
+                   help="which split to evaluate ('all' = every annotated image)")
+    p.add_argument("--test-fraction", type=float, default=0.05,
+                   help="held-out test fraction (must match train.py)")
+    p.add_argument("--split-seed",  type=int,   default=42,
+                   help="split seed (must match train.py)")
     p.add_argument("--checkpoint",  default="checkpoints/best.pth")
     p.add_argument("--phi",         type=int,   default=0)
     p.add_argument("--batch-size",  type=int,   default=8)
     p.add_argument("--workers",     type=int,   default=4)
     p.add_argument("--score-thresh",type=float, default=0.05)
     p.add_argument("--iou-thresh",  type=float, default=0.5)
+    p.add_argument("--keep-empty",  action="store_true",
+                   help="keep annotation-free images so detections on 'normal' "
+                        "images count as false positives (must match train.py)")
     return p.parse_args()
 
 
@@ -84,10 +98,14 @@ def main():
 
     config = EfficientDetConfig(phi=args.phi)
 
+    split = None if args.split == "all" else args.split
     val_ds = CocoDataset(
-        args.val_images, args.val_ann,
+        args.images, args.ann,
         transforms=build_val_transforms(config.input_resolution),
+        split=split, test_fraction=args.test_fraction, seed=args.split_seed,
+        keep_empty=args.keep_empty,
     )
+    print(f"Evaluating split='{args.split}'  |  {len(val_ds)} images")
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, collate_fn=collate_fn,
@@ -118,6 +136,9 @@ def main():
 
     coco_dt = val_ds.coco.loadRes(result_path)
     coco_eval = COCOeval(val_ds.coco, coco_dt, "bbox")
+    # Restrict scoring to the evaluated split; otherwise the annotation file's
+    # other images (e.g. the ~112k train images) count as missed detections.
+    coco_eval.params.imgIds = sorted(val_ds.ids)
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()

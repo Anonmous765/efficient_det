@@ -50,6 +50,10 @@ Thumbs.db
 
 # Dataset, checkpoints, and exported logs
 coco/
+coco2017/
+data/
 checkpoints/
+predictions/
 coco_det_results.json
 *.txt
+result.json
