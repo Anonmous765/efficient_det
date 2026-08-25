@@ -38,9 +38,18 @@ def download_and_extract(url: str, dest_dir: str):
     os.makedirs(dest_dir, exist_ok=True)
     filename = os.path.join(dest_dir, url.split("/")[-1])
 
+    if os.path.exists(filename) and not zipfile.is_zipfile(filename):
+        print(f"Found incomplete/corrupt download, removing: {filename}")
+        os.remove(filename)
+
     if not os.path.exists(filename):
         print(f"Downloading {url}")
-        urllib.request.urlretrieve(url, filename, reporthook=_progress)
+        try:
+            urllib.request.urlretrieve(url, filename, reporthook=_progress)
+        except BaseException:
+            if os.path.exists(filename):
+                os.remove(filename)
+            raise
         print()
     else:
         print(f"Already downloaded: {filename}")
