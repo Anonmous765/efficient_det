@@ -99,10 +99,10 @@ A held-out test slice (`--test-fraction`, default 5%) is carved out of `train201
 | `--keep-empty` | off | keep images with zero annotations as negative/background samples (required for the anomaly pipeline) |
 | `--phi` | `0` | EfficientDet compound scaling coefficient, 0–7 (see table above) |
 | `--epochs` | `50` | number of training epochs |
-| `--batch-size` | `16` | batch size |
+| `--batch-size` | `16` | batch size **per GPU** (under `torchrun` the effective batch is this × number of processes) |
 | `--lr` | `1e-4` | learning rate |
 | `--weight-decay` | `1e-4` | weight decay |
-| `--workers` | `4` | `DataLoader` worker processes |
+| `--workers` | `4` | `DataLoader` worker processes **per GPU process** |
 | `--checkpoint-dir` | `checkpoints` | directory for checkpoints, loss curve, and loss history |
 | `--resume` | none | path to a checkpoint to resume training **the same run** from (restores model, optimizer, and loss history) |
 | `--init-from` | none | path to a checkpoint to **initialize weights from** for a new run on a different dataset (e.g. COCO → anomaly transfer learning). Loads only shape-matching tensors — the classification head is skipped when `num_classes` differs and stays randomly initialized. Optimizer state and epoch count are not restored. Mutually exclusive with `--resume` |
@@ -110,6 +110,33 @@ A held-out test slice (`--test-fraction`, default 5%) is carved out of `train201
 | `--compile` | off | wrap the model with `torch.compile` |
 | `--patience` | `0` (disabled) | stop early after `N` epochs without validation-loss improvement |
 | `--freeze-backbone` | off | freeze the EfficientNet backbone (weights + BatchNorm running stats); only the BiFPN and heads train. Typically paired with `--init-from` when fine-tuning on a small dataset |
+| `--find-unused-parameters` | off | multi-GPU only; see the DDP section below |
+
+**Multi-GPU training (DistributedDataParallel)**
+
+`train.py` runs on multiple GPUs via `torchrun`, one process per GPU. No code changes or extra flags are needed — launching under `torchrun` is what switches it on, and a plain `python train.py` still runs single-process exactly as before:
+
+```bash
+torchrun --nproc_per_node=4 train.py \
+    --train-images data/anomaly/images \
+    --train-ann    data/anomaly/annotations/instances_train.json \
+    --val-images   data/anomaly/images \
+    --val-ann      data/anomaly/annotations/instances_val.json \
+    --phi 0 --test-fraction 0 --keep-empty \
+    --batch-size 8 --lr 2e-4
+```
+
+Set `--nproc_per_node` to the number of GPUs you want to use. What changes under DDP:
+
+- **`--batch-size` and `--workers` are per GPU.** The example above trains on an effective batch of 8 × 4 = 32, so the learning rate is scaled up to compensate.
+- **A `DistributedSampler` shards each epoch** so every rank sees a disjoint subset of images; the sampler is re-seeded each epoch (`set_epoch`) so the shuffling actually changes between epochs.
+- **Reported losses are averaged across ranks.** Each rank only sees its own shard, so `train_loss`/`val_loss` are all-reduced before being printed. This also keeps best-checkpoint selection and `--patience` early stopping identical on every rank — if the ranks disagreed, one could exit the epoch loop while the others hung waiting on it.
+- **Only rank 0 prints, writes checkpoints, and plots the loss curve**, so the checkpoint directory isn't written by four processes at once.
+- **Checkpoints stay wrapper-free.** The bare model is saved, not the DDP wrapper, so `state_dict` keys have no `module.` prefix and `evaluate.py` / `visualize.py` load them unchanged.
+
+If training crashes with *"Expected to have finished reduction in the prior iteration"*, add `--find-unused-parameters`. It costs some speed, which is why it's off by default.
+
+A benign `UserWarning: Grad strides do not match bucket view strides` may appear — it comes from combining `channels_last` memory format with DDP's gradient buckets and does not affect correctness.
 
 **3. Evaluate (COCO mAP)**
 

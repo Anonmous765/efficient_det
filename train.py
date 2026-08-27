@@ -13,6 +13,15 @@ Usage:
         --lr 1e-4 \
         --workers 4 \
         --checkpoint-dir checkpoints
+
+Multi-GPU (DistributedDataParallel), one process per GPU via torchrun:
+
+    torchrun --nproc_per_node=4 train.py --batch-size 8 ...
+
+    --batch-size and --workers are PER GPU, so the example above trains on an
+    effective batch of 32. Scale --lr accordingly. Every rank runs this same
+    script; only rank 0 prints, writes checkpoints, and plots the loss curve.
+    Without torchrun the script runs single-process exactly as before.
 """
 import argparse
 import json
@@ -24,7 +33,9 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, DistributedSampler
 
 from efficientdet import EfficientDet, EfficientDetConfig
 from efficientdet.utils.loss import EfficientDetLoss
@@ -32,6 +43,47 @@ from efficientdet.utils.matcher import match_anchors
 
 from dataset import CocoDataset, collate_fn
 from dataset.transforms import Compose, Resize, RandomHorizontalFlip, ColorJitter, ToTensor
+
+
+# ---------------------------------------------------------------------------
+# Distributed helpers
+# ---------------------------------------------------------------------------
+
+def setup_distributed():
+    """Join the process group when launched under torchrun.
+
+    torchrun sets RANK / WORLD_SIZE / LOCAL_RANK in the environment; their
+    absence means a plain `python train.py`, so we report single-process
+    values and never touch torch.distributed.
+
+    Returns (distributed, rank, world_size, local_rank).
+    """
+    if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+        return False, 0, 1, 0
+
+    rank       = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(local_rank)
+    return True, rank, world_size, local_rank
+
+
+def all_reduce_mean(value: float, device) -> float:
+    """Average a per-rank scalar across every rank.
+
+    Each rank only sees its own shard of the data, so its epoch loss is a
+    partial number. Averaging matters beyond cosmetics: val_loss drives
+    best-checkpoint selection and early stopping, and if the ranks disagreed
+    one could break out of the epoch loop while the others kept going and
+    then hung forever on the next collective.
+    """
+    if not dist.is_initialized():
+        return value
+    t = torch.tensor([value], device=device, dtype=torch.float64)
+    dist.all_reduce(t, op=dist.ReduceOp.SUM)
+    return (t / dist.get_world_size()).item()
 
 
 # ---------------------------------------------------------------------------
@@ -114,12 +166,15 @@ def plot_loss_history(history, out_path):
 # Train / val loops
 # ---------------------------------------------------------------------------
 
-def train_one_epoch(model, loader, criterion, optimizer, device, amp, num_classes, freeze_backbone=False):
+def train_one_epoch(model, loader, criterion, optimizer, device, amp, num_classes,
+                    freeze_backbone=False, raw_model=None, is_main=True):
+    """`model` may be wrapped in DDP/torch.compile; `raw_model` is the bare
+    EfficientDet, needed to reach .backbone through those wrappers."""
     model.train()
     if freeze_backbone:
         # Keep the backbone's BatchNorm layers in eval mode too, so their running
         # mean/var stats stay frozen along with the (requires_grad=False) weights.
-        model.backbone.eval()
+        (raw_model if raw_model is not None else model).backbone.eval()
     total_loss = 0.0
 
     for batch_idx, (images, gt_boxes_list, gt_labels_list, _) in enumerate(loader):
@@ -140,10 +195,10 @@ def train_one_epoch(model, loader, criterion, optimizer, device, amp, num_classe
 
         total_loss += loss.item()
 
-        if (batch_idx + 1) % 100 == 0:
+        if is_main and (batch_idx + 1) % 100 == 0:
             print(f"  step {batch_idx+1}/{len(loader)}  loss={loss.item():.4f}")
 
-    return total_loss / len(loader)
+    return all_reduce_mean(total_loss / len(loader), device)
 
 
 @torch.no_grad()
@@ -161,7 +216,7 @@ def validate(model, loader, criterion, device, amp, num_classes):
             loss = criterion(class_preds, box_preds, cls_targets, box_targets, pos_mask)
         total_loss += loss.item()
 
-    return total_loss / len(loader)
+    return all_reduce_mean(total_loss / len(loader), device)
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +238,13 @@ def parse_args():
                         "dataset includes 'normal' background images)")
     p.add_argument("--phi",            type=int,   default=0)
     p.add_argument("--epochs",         type=int,   default=50)
-    p.add_argument("--batch-size",     type=int,   default=16)
+    p.add_argument("--batch-size",     type=int,   default=16,
+                   help="batch size PER GPU (under torchrun the effective batch "
+                        "is this times the number of processes)")
     p.add_argument("--lr",             type=float, default=1e-4)
     p.add_argument("--weight-decay",   type=float, default=1e-4)
-    p.add_argument("--workers",        type=int,   default=4)
+    p.add_argument("--workers",        type=int,   default=4,
+                   help="dataloader workers PER GPU process")
     p.add_argument("--checkpoint-dir", default="checkpoints")
     p.add_argument("--resume",         default=None, help="path to checkpoint to resume from")
     p.add_argument("--init-from",      default=None,
@@ -205,6 +263,10 @@ def parse_args():
                    help="freeze the EfficientNet backbone (weights + BatchNorm running stats) "
                         "and only train the BiFPN and heads. Useful for fine-tuning on a small "
                         "dataset, e.g. together with --init-from.")
+    p.add_argument("--find-unused-parameters", action="store_true",
+                   help="DDP only: set if training crashes with 'expected to have "
+                        "finished reduction in the prior iteration'. Costs a little "
+                        "speed, so it is off by default.")
     return p.parse_args()
 
 
@@ -212,7 +274,16 @@ def main():
     args = parse_args()
     if args.resume and args.init_from:
         raise SystemExit("--resume and --init-from are mutually exclusive")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    distributed, rank, world_size, local_rank = setup_distributed()
+    is_main = rank == 0
+    if distributed:
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if is_main and distributed:
+        print(f"Distributed: {world_size} processes / GPUs, "
+              f"effective batch = {args.batch_size * world_size}")
 
     if device.type == "cuda":
         # TF32 matmuls/convs + autotuned kernels for the fixed input size
@@ -237,14 +308,21 @@ def main():
         keep_empty=args.keep_empty,
     )
     num_classes = train_ds.get_num_classes()
-    print(f"Classes: {num_classes}  |  Train: {len(train_ds)}  |  Val: {len(val_ds)}")
+    if is_main:
+        print(f"Classes: {num_classes}  |  Train: {len(train_ds)}  |  Val: {len(val_ds)}")
+
+    # Under DDP each rank must see a disjoint shard; the sampler owns the
+    # shuffling, so DataLoader(shuffle=...) has to be left off.
+    train_sampler = DistributedSampler(train_ds, shuffle=True) if distributed else None
+    val_sampler   = DistributedSampler(val_ds, shuffle=False)  if distributed else None
 
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
+        train_ds, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=args.workers, pin_memory=True, collate_fn=collate_fn,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
+        val_ds, batch_size=args.batch_size, shuffle=False, sampler=val_sampler,
         num_workers=args.workers, pin_memory=True, collate_fn=collate_fn,
     )
 
@@ -258,7 +336,8 @@ def main():
         for p in model.backbone.parameters():
             p.requires_grad = False
         n_frozen = sum(p.numel() for p in model.backbone.parameters())
-        print(f"Backbone frozen: {n_frozen:,} params will not be updated")
+        if is_main:
+            print(f"Backbone frozen: {n_frozen:,} params will not be updated")
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
@@ -278,13 +357,16 @@ def main():
     history_path = os.path.join(args.checkpoint_dir, "loss_history.json")
     curve_path   = os.path.join(args.checkpoint_dir, "loss_curve.png")
 
+    # Every rank loads the same weights here; DDP would broadcast rank 0's copy
+    # anyway, but loading everywhere keeps the non-distributed path identical.
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model_state"])
         optimizer.load_state_dict(ckpt["optimizer_state"])
         start_epoch = ckpt["epoch"] + 1
         best_val_loss = ckpt.get("val_loss", float("inf"))
-        print(f"Resumed from epoch {ckpt['epoch']}")
+        if is_main:
+            print(f"Resumed from epoch {ckpt['epoch']}")
         # Carry forward the loss history so the curve continues unbroken
         if os.path.exists(history_path):
             with open(history_path) as f:
@@ -298,54 +380,83 @@ def main():
         skipped = [k for k in src_state if k not in matched]
         dst_state.update(matched)
         model.load_state_dict(dst_state)
-        print(f"Initialized {len(matched)}/{len(src_state)} tensors from {args.init_from}")
-        if skipped:
-            print(f"  skipped {len(skipped)} shape-mismatched tensor(s) "
-                  f"(left randomly initialized): {skipped}")
+        if is_main:
+            print(f"Initialized {len(matched)}/{len(src_state)} tensors from {args.init_from}")
+            if skipped:
+                print(f"  skipped {len(skipped)} shape-mismatched tensor(s) "
+                      f"(left randomly initialized): {skipped}")
 
-    # Compile AFTER loading weights; checkpoints still save the original `model`
-    # so its state_dict keys stay clean (no _orig_mod. prefix) for evaluate.py.
-    train_model = torch.compile(model) if args.compile else model
+    # Wrap AFTER loading weights; checkpoints still save the original `model`
+    # so its state_dict keys stay clean (no _orig_mod./module. prefix) for
+    # evaluate.py. DDP broadcasts rank 0's parameters at construction, so all
+    # ranks start from identical weights without extra seeding.
+    train_model = model
+    if distributed:
+        train_model = DistributedDataParallel(
+            train_model, device_ids=[local_rank], output_device=local_rank,
+            find_unused_parameters=args.find_unused_parameters,
+        )
+    if args.compile:
+        train_model = torch.compile(train_model)
 
     for epoch in range(start_epoch, args.epochs):
-        print(f"\nEpoch {epoch+1}/{args.epochs}  lr={scheduler.get_last_lr()[0]:.2e}")
+        if is_main:
+            print(f"\nEpoch {epoch+1}/{args.epochs}  lr={scheduler.get_last_lr()[0]:.2e}")
+
+        # Reshuffles the shards each epoch — without this every rank replays
+        # the exact same images in the same order for the whole run.
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
 
         train_loss = train_one_epoch(train_model, train_loader, criterion, optimizer, device, amp, num_classes,
-                                      freeze_backbone=args.freeze_backbone)
+                                      freeze_backbone=args.freeze_backbone,
+                                      raw_model=model, is_main=is_main)
         val_loss   = validate(train_model, val_loader, criterion, device, amp, num_classes)
         scheduler.step()
 
-        print(f"  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")
-
-        # Record history and refresh the loss curve (so it survives an interrupt)
+        # train_loss / val_loss are all-reduced, so every rank agrees on the
+        # numbers below and takes the same early-stopping branch.
         history["train"].append(train_loss)
         history["val"].append(val_loss)
-        with open(history_path, "w") as f:
-            json.dump(history, f, indent=2)
-        plot_loss_history(history, curve_path)
+        improved = val_loss < best_val_loss
 
-        # Save latest
-        save_checkpoint(
-            os.path.join(args.checkpoint_dir, "last.pth"),
-            epoch, model, optimizer, val_loss,
-        )
-        # Save best + track early-stopping patience
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            epochs_since_improve = 0
+        if is_main:
+            print(f"  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}")
+
+            # Record history and refresh the loss curve (so it survives an interrupt)
+            with open(history_path, "w") as f:
+                json.dump(history, f, indent=2)
+            plot_loss_history(history, curve_path)
+
+            # Save latest
             save_checkpoint(
-                os.path.join(args.checkpoint_dir, "best.pth"),
+                os.path.join(args.checkpoint_dir, "last.pth"),
                 epoch, model, optimizer, val_loss,
             )
-            print(f"  ** New best val loss: {best_val_loss:.4f}")
+            if improved:
+                save_checkpoint(
+                    os.path.join(args.checkpoint_dir, "best.pth"),
+                    epoch, model, optimizer, val_loss,
+                )
+                print(f"  ** New best val loss: {val_loss:.4f}")
+
+        # Early-stopping bookkeeping runs on every rank
+        if improved:
+            best_val_loss = val_loss
+            epochs_since_improve = 0
         else:
             epochs_since_improve += 1
             if args.patience and epochs_since_improve >= args.patience:
-                print(f"\nEarly stop: no val improvement for {args.patience} epochs "
-                      f"(best={best_val_loss:.4f}).")
+                if is_main:
+                    print(f"\nEarly stop: no val improvement for {args.patience} epochs "
+                          f"(best={best_val_loss:.4f}).")
                 break
 
-    print(f"\nDone. Loss curve: {curve_path}  |  history: {history_path}")
+    if is_main:
+        print(f"\nDone. Loss curve: {curve_path}  |  history: {history_path}")
+
+    if distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
