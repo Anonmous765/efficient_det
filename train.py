@@ -114,8 +114,12 @@ def plot_loss_history(history, out_path):
 # Train / val loops
 # ---------------------------------------------------------------------------
 
-def train_one_epoch(model, loader, criterion, optimizer, device, amp, num_classes):
+def train_one_epoch(model, loader, criterion, optimizer, device, amp, num_classes, freeze_backbone=False):
     model.train()
+    if freeze_backbone:
+        # Keep the backbone's BatchNorm layers in eval mode too, so their running
+        # mean/var stats stay frozen along with the (requires_grad=False) weights.
+        model.backbone.eval()
     total_loss = 0.0
 
     for batch_idx, (images, gt_boxes_list, gt_labels_list, _) in enumerate(loader):
@@ -185,16 +189,29 @@ def parse_args():
     p.add_argument("--workers",        type=int,   default=4)
     p.add_argument("--checkpoint-dir", default="checkpoints")
     p.add_argument("--resume",         default=None, help="path to checkpoint to resume from")
+    p.add_argument("--init-from",      default=None,
+                   help="load matching-shape weights from a checkpoint (e.g. a COCO-pretrained "
+                        "run) as a starting point for training on a different dataset/num_classes. "
+                        "Layers whose shape doesn't match (e.g. the classification head, which is "
+                        "sized by num_classes) are skipped and stay randomly initialized. Unlike "
+                        "--resume, the optimizer state and epoch count are NOT restored — this "
+                        "starts a fresh training run. Mutually exclusive with --resume.")
     p.add_argument("--no-amp",         action="store_true", help="disable bf16 mixed-precision training")
     p.add_argument("--compile",        action="store_true",
                    help="wrap the model in torch.compile (slow first step, faster afterwards)")
     p.add_argument("--patience",       type=int,   default=0,
                    help="early-stop after N epochs without val-loss improvement (0 = disabled)")
+    p.add_argument("--freeze-backbone", action="store_true",
+                   help="freeze the EfficientNet backbone (weights + BatchNorm running stats) "
+                        "and only train the BiFPN and heads. Useful for fine-tuning on a small "
+                        "dataset, e.g. together with --init-from.")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.resume and args.init_from:
+        raise SystemExit("--resume and --init-from are mutually exclusive")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if device.type == "cuda":
@@ -237,8 +254,15 @@ def main():
         model = model.to(memory_format=torch.channels_last)  # better Tensor-Core use
     criterion = EfficientDetLoss()
 
+    if args.freeze_backbone:
+        for p in model.backbone.parameters():
+            p.requires_grad = False
+        n_frozen = sum(p.numel() for p in model.backbone.parameters())
+        print(f"Backbone frozen: {n_frozen:,} params will not be updated")
+
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        [p for p in model.parameters() if p.requires_grad],
+        lr=args.lr, weight_decay=args.weight_decay,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs, eta_min=1e-6
@@ -265,6 +289,19 @@ def main():
         if os.path.exists(history_path):
             with open(history_path) as f:
                 history = json.load(f)
+    elif args.init_from:
+        ckpt = torch.load(args.init_from, map_location=device)
+        src_state = ckpt["model_state"]
+        dst_state = model.state_dict()
+        matched = {k: v for k, v in src_state.items()
+                   if k in dst_state and v.shape == dst_state[k].shape}
+        skipped = [k for k in src_state if k not in matched]
+        dst_state.update(matched)
+        model.load_state_dict(dst_state)
+        print(f"Initialized {len(matched)}/{len(src_state)} tensors from {args.init_from}")
+        if skipped:
+            print(f"  skipped {len(skipped)} shape-mismatched tensor(s) "
+                  f"(left randomly initialized): {skipped}")
 
     # Compile AFTER loading weights; checkpoints still save the original `model`
     # so its state_dict keys stay clean (no _orig_mod. prefix) for evaluate.py.
@@ -273,7 +310,8 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}  lr={scheduler.get_last_lr()[0]:.2e}")
 
-        train_loss = train_one_epoch(train_model, train_loader, criterion, optimizer, device, amp, num_classes)
+        train_loss = train_one_epoch(train_model, train_loader, criterion, optimizer, device, amp, num_classes,
+                                      freeze_backbone=args.freeze_backbone)
         val_loss   = validate(train_model, val_loader, criterion, device, amp, num_classes)
         scheduler.step()
 

@@ -104,10 +104,12 @@ A held-out test slice (`--test-fraction`, default 5%) is carved out of `train201
 | `--weight-decay` | `1e-4` | weight decay |
 | `--workers` | `4` | `DataLoader` worker processes |
 | `--checkpoint-dir` | `checkpoints` | directory for checkpoints, loss curve, and loss history |
-| `--resume` | none | path to a checkpoint to resume training from (restores model, optimizer, and loss history) |
+| `--resume` | none | path to a checkpoint to resume training **the same run** from (restores model, optimizer, and loss history) |
+| `--init-from` | none | path to a checkpoint to **initialize weights from** for a new run on a different dataset (e.g. COCO → anomaly transfer learning). Loads only shape-matching tensors — the classification head is skipped when `num_classes` differs and stays randomly initialized. Optimizer state and epoch count are not restored. Mutually exclusive with `--resume` |
 | `--no-amp` | off | disable bf16 mixed-precision training |
 | `--compile` | off | wrap the model with `torch.compile` |
 | `--patience` | `0` (disabled) | stop early after `N` epochs without validation-loss improvement |
+| `--freeze-backbone` | off | freeze the EfficientNet backbone (weights + BatchNorm running stats); only the BiFPN and heads train. Typically paired with `--init-from` when fine-tuning on a small dataset |
 
 **3. Evaluate (COCO mAP)**
 
@@ -195,6 +197,38 @@ python train.py \
 
 `--keep-empty` is required so that negative (Normal) images are used as background samples during training. `--test-fraction 0` disables the train/test carve-out since the anomaly dataset already ships with a predefined split. All other `train.py` flags (see the table in Pipeline 1) apply the same way here.
 
+**2b. (Recommended) Initialize from a COCO-pretrained checkpoint**
+
+The anomaly dataset is small (~2.2k images, 1 class), so training it from scratch wastes everything the model could otherwise learn about general image features from COCO's 118k images. Use `--init-from` to carry over the COCO-pretrained backbone + BiFPN weights and fine-tune on top of them, instead of `--resume` (which is for continuing an interrupted run on the *same* dataset, not for transferring to a new one):
+
+```bash
+python train.py \
+    --train-images data/anomaly/images \
+    --train-ann    data/anomaly/annotations/instances_train.json \
+    --val-images   data/anomaly/images \
+    --val-ann      data/anomaly/annotations/instances_val.json \
+    --phi 0 --test-fraction 0 --keep-empty \
+    --init-from checkpoints_coco/best.pth \
+    --checkpoint-dir checkpoints_anomaly \
+    --lr 1e-5 --epochs 100
+```
+
+Why this works: COCO has 80 classes and the anomaly dataset has 1, so the two models' classification heads are different shapes (`final_conv` in `ClassificationHead`, `efficientdet/heads.py`). `--init-from` loads every tensor whose shape matches the freshly built model — that's the entire EfficientNet backbone and BiFPN, plus the box head and all of the classification head except its last layer — and leaves the one mismatched layer (the class-count-dependent `final_conv`) randomly initialized. It prints how many tensors were transferred vs. skipped so you can confirm the load did what you expect. A lower `--lr` than the from-scratch default is typical for fine-tuning a mostly-pretrained model.
+
+Add `--freeze-backbone` if the anomaly dataset is small enough that fine-tuning the full EfficientNet backbone risks overfitting or destroying its pretrained features — this locks the backbone's weights and BatchNorm running stats, training only the BiFPN and heads on top of frozen COCO-pretrained features:
+
+```bash
+python train.py \
+    --train-images data/anomaly/images \
+    --train-ann    data/anomaly/annotations/instances_train.json \
+    --val-images   data/anomaly/images \
+    --val-ann      data/anomaly/annotations/instances_val.json \
+    --phi 0 --test-fraction 0 --keep-empty \
+    --init-from checkpoints_coco/best.pth --freeze-backbone \
+    --checkpoint-dir checkpoints_anomaly \
+    --lr 1e-4 --epochs 100
+```
+
 **3. Evaluate / visualize**
 
 Same as the COCO pipeline — point `evaluate.py` / `visualize.py` at `data/anomaly/images` and `data/anomaly/annotations/instances_test.json` (use `--keep-empty` so false positives on Normal images are counted).
@@ -203,7 +237,7 @@ Same as the COCO pipeline — point `evaluate.py` / `visualize.py` at `data/anom
 
 - Checkpoints (`last.pth` / `best.pth`), a loss curve, and loss history are written to `--checkpoint-dir` (default `checkpoints/`) after every epoch. `best.pth` tracks the lowest validation loss seen so far; `last.pth` is always the most recent epoch, so it's the one `--resume` should generally point at.
 - Training uses bf16 mixed precision on CUDA by default (`--no-amp` to disable), TF32 matmuls, and `channels_last` memory format.
-- `--resume <checkpoint>` continues training from a saved checkpoint, including its loss history.
+- `--resume <checkpoint>` continues training from a saved checkpoint, including its loss history. `--init-from <checkpoint>` instead starts a *new* run initialized from another checkpoint's weights (shape-matching tensors only) — use this for COCO → anomaly transfer learning, not `--resume`, since the two datasets have different `num_classes`.
 - `--patience N` enables early stopping after `N` epochs without validation-loss improvement.
 - Loss is the sum of focal loss (classification, handles foreground/background class imbalance) and L1 loss (box regression), computed only over anchors matched to a ground-truth box by `efficientdet/utils/matcher.py`.
 - Datasets, checkpoints, and predictions are gitignored — this repo tracks code only.
