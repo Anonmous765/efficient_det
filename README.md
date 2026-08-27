@@ -111,6 +111,7 @@ A held-out test slice (`--test-fraction`, default 5%) is carved out of `train201
 | `--patience` | `0` (disabled) | stop early after `N` epochs without validation-loss improvement |
 | `--freeze-backbone` | off | freeze the EfficientNet backbone (weights + BatchNorm running stats); only the BiFPN and heads train. Typically paired with `--init-from` when fine-tuning on a small dataset |
 | `--find-unused-parameters` | off | multi-GPU only; see the DDP section below |
+| `--dist-timeout` | `120` | multi-GPU only; seconds a collective may block before failing (NCCL's own default is 600) |
 
 **Multi-GPU training (DistributedDataParallel)**
 
@@ -137,6 +138,45 @@ Set `--nproc_per_node` to the number of GPUs you want to use. What changes under
 If training crashes with *"Expected to have finished reduction in the prior iteration"*, add `--find-unused-parameters`. It costs some speed, which is why it's off by default.
 
 A benign `UserWarning: Grad strides do not match bucket view strides` may appear — it comes from combining `channels_last` memory format with DDP's gradient buckets and does not affect correctness.
+
+**Troubleshooting: NCCL hangs at startup**
+
+On multi-GPU workstations without NVLink (e.g. several RTX A5000s on plain PCIe), NCCL often cannot establish peer-to-peer between GPUs, usually because IOMMU/ACS blocks it. Training then hangs at the `DistributedDataParallel(...)` line — the first NCCL collective — and eventually dies with:
+
+```
+RuntimeError: DDP expects same model across all ranks, but Rank 3 has 419 params,
+              while rank 0 has inconsistent 0 params.
+WorkNCCL(... OpType=ALLGATHER ...) ran for 600030 milliseconds before timing out
+```
+
+The "inconsistent 0 params" is a red herring — the models are fine, the ALLGATHER simply never returned. The fix is to route collectives through host memory:
+
+```bash
+NCCL_P2P_DISABLE=1 torchrun --nproc_per_node=4 train.py ...
+```
+
+Beware that a hung NCCL collective **does not look idle**: its spin-wait kernels hold every GPU at 100% utilization with high power draw and temperature, which is easily mistaken for real training. Check `checkpoints/loss_history.json` for actual epoch progress rather than trusting `nvidia-smi`.
+
+To confirm the diagnosis in seconds rather than minutes, test NCCL on its own:
+
+```bash
+cat > /tmp/nccl_test.py <<'EOF'
+import os, torch, torch.distributed as dist
+from datetime import timedelta
+lr = int(os.environ["LOCAL_RANK"])
+torch.cuda.set_device(lr)
+dist.init_process_group("nccl", timeout=timedelta(seconds=60))
+t = torch.ones(1, device=f"cuda:{lr}")
+dist.all_reduce(t)
+print(f"rank {dist.get_rank()}: all_reduce OK -> {t.item()}", flush=True)
+dist.destroy_process_group()
+EOF
+
+torchrun --nproc_per_node=4 /tmp/nccl_test.py                      # hangs if P2P is broken
+NCCL_P2P_DISABLE=1 torchrun --nproc_per_node=4 /tmp/nccl_test.py   # should print 4.0 per rank
+```
+
+`nvidia-smi topo -m` shows the interconnect matrix if you want to see how the GPUs are wired.
 
 **3. Evaluate (COCO mAP)**
 

@@ -24,8 +24,10 @@ Multi-GPU (DistributedDataParallel), one process per GPU via torchrun:
     Without torchrun the script runs single-process exactly as before.
 """
 import argparse
+import functools
 import json
 import os
+from datetime import timedelta
 
 import matplotlib
 matplotlib.use("Agg")  # headless: write PNGs without a display
@@ -49,7 +51,12 @@ from dataset.transforms import Compose, Resize, RandomHorizontalFlip, ColorJitte
 # Distributed helpers
 # ---------------------------------------------------------------------------
 
-def setup_distributed():
+# torchrun pipes each rank's stdout, which flips Python from line- to
+# block-buffering: short progress lines then sit unseen in a half-full buffer.
+print = functools.partial(print, flush=True)  # noqa: A001
+
+
+def setup_distributed(timeout_s: int):
     """Join the process group when launched under torchrun.
 
     torchrun sets RANK / WORLD_SIZE / LOCAL_RANK in the environment; their
@@ -65,7 +72,12 @@ def setup_distributed():
     world_size = int(os.environ["WORLD_SIZE"])
     local_rank = int(os.environ.get("LOCAL_RANK", rank))
 
-    dist.init_process_group(backend="nccl")
+    # NCCL's default 10-minute watchdog means a machine that cannot do
+    # GPU-to-GPU collectives at all takes 10 minutes to say so, while the
+    # spin-wait kernels keep every GPU at 100% util and look like real work.
+    # Fail fast instead: the first collective either works within seconds or
+    # the setup is broken. See the README on NCCL_P2P_DISABLE=1.
+    dist.init_process_group(backend="nccl", timeout=timedelta(seconds=timeout_s))
     torch.cuda.set_device(local_rank)
     return True, rank, world_size, local_rank
 
@@ -267,6 +279,10 @@ def parse_args():
                    help="DDP only: set if training crashes with 'expected to have "
                         "finished reduction in the prior iteration'. Costs a little "
                         "speed, so it is off by default.")
+    p.add_argument("--dist-timeout",   type=int,   default=120,
+                   help="seconds a distributed collective may block before giving up "
+                        "(default 120 vs NCCL's 600, so a box that cannot do GPU-to-GPU "
+                        "collectives reports it quickly instead of appearing to train)")
     return p.parse_args()
 
 
@@ -275,7 +291,7 @@ def main():
     if args.resume and args.init_from:
         raise SystemExit("--resume and --init-from are mutually exclusive")
 
-    distributed, rank, world_size, local_rank = setup_distributed()
+    distributed, rank, world_size, local_rank = setup_distributed(args.dist_timeout)
     is_main = rank == 0
     if distributed:
         device = torch.device("cuda", local_rank)
