@@ -36,10 +36,23 @@ def build_val_transforms(input_size: int):
 
 @torch.no_grad()
 def run_evaluation(model, loader, dataset, device, score_thresh=0.05, iou_thresh=0.5):
+    """Run inference over the loader.
+
+    Returns (coco_results, img_top_score, img_has_gt):
+      coco_results  : detections in COCO submission format, for COCOeval
+      img_top_score : {image_id: highest detection score, 0.0 if none}
+      img_has_gt    : {image_id: image has at least one ground-truth box}
+
+    The last two drive the image-level confusion matrix. Collecting them here
+    means the threshold sweep re-scores cached numbers instead of re-running
+    inference once per candidate threshold.
+    """
     model.eval()
     coco_results = []
+    img_top_score = {}
+    img_has_gt    = {}
 
-    for images, _, _, img_ids in loader:
+    for images, gt_boxes_list, _, img_ids in loader:
         images = images.to(device)
         class_preds, box_preds, anchors = model(images)
         detections = apply_nms(
@@ -47,12 +60,18 @@ def run_evaluation(model, loader, dataset, device, score_thresh=0.05, iou_thresh
             score_thresh=score_thresh, iou_thresh=iou_thresh,
         )
 
-        for det, img_id in zip(detections, img_ids):
+        for det, gt_boxes, img_id in zip(detections, gt_boxes_list, img_ids):
+            img_id = int(img_id)
+            img_has_gt[img_id] = bool(gt_boxes.shape[0] > 0)
+
             if det["boxes"].numel() == 0:
+                img_top_score[img_id] = 0.0
                 continue
             boxes  = det["boxes"].cpu()   # (K, 4) xyxy
             scores = det["scores"].cpu()  # (K,)
             labels = det["labels"].cpu()  # (K,)
+
+            img_top_score[img_id] = float(scores.max())
 
             # COCO expects (x1, y1, w, h)
             boxes_xywh = boxes.clone()
@@ -61,13 +80,93 @@ def run_evaluation(model, loader, dataset, device, score_thresh=0.05, iou_thresh
 
             for k in range(boxes.shape[0]):
                 coco_results.append({
-                    "image_id":   int(img_id),
+                    "image_id":   img_id,
                     "category_id": dataset.label_to_cat_id[int(labels[k])],
                     "bbox":       boxes_xywh[k].tolist(),
                     "score":      float(scores[k]),
                 })
 
-    return coco_results
+    return coco_results, img_top_score, img_has_gt
+
+
+# ---------------------------------------------------------------------------
+# Image-level ("is this print defective?") metrics
+# ---------------------------------------------------------------------------
+
+def confusion_at(img_top_score, img_has_gt, thresh):
+    """Count TP/FP/FN/TN treating each image as one binary decision.
+
+    An image is *predicted* anomalous when its highest-scoring detection
+    clears `thresh`, and is *actually* anomalous when it carries at least one
+    ground-truth box. Normal images (deliberately annotation-free) are the
+    negatives, so a detection on one is a false positive.
+    """
+    tp = fp = fn = tn = 0
+    for img_id, has_gt in img_has_gt.items():
+        pred_pos = img_top_score.get(img_id, 0.0) >= thresh
+        if   has_gt and pred_pos:         tp += 1
+        elif has_gt and not pred_pos:     fn += 1
+        elif not has_gt and pred_pos:     fp += 1
+        else:                             tn += 1
+    return tp, fp, fn, tn
+
+
+def derive_metrics(tp, fp, fn, tn):
+    """accuracy, precision, recall, specificity, F1 — 0.0 where undefined."""
+    total = tp + fp + fn + tn
+    acc  = (tp + tn) / total     if total       else 0.0
+    prec = tp / (tp + fp)        if (tp + fp)   else 0.0
+    rec  = tp / (tp + fn)        if (tp + fn)   else 0.0
+    spec = tn / (tn + fp)        if (tn + fp)   else 0.0
+    f1   = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+    return acc, prec, rec, spec, f1
+
+
+def print_image_level_report(img_top_score, img_has_gt, chosen_thresh=None):
+    n_pos = sum(1 for v in img_has_gt.values() if v)
+    n_neg = len(img_has_gt) - n_pos
+
+    print("\n" + "=" * 66)
+    print("IMAGE-LEVEL DETECTION  (does this image contain an anomaly?)")
+    print("=" * 66)
+    print(f"{len(img_has_gt)} images: {n_pos} anomaly (has boxes) / "
+          f"{n_neg} normal (no boxes)")
+
+    if n_neg == 0:
+        print("\nNOTE: no annotation-free images in this split, so there are no\n"
+              "      true negatives — specificity and false positives are\n"
+              "      meaningless here. Re-run with --keep-empty.")
+
+    # Sweep the decision threshold over the cached scores.
+    sweep = [round(0.05 * i, 2) for i in range(1, 20)]
+    print(f"\n{'thresh':>7} {'TP':>5} {'FP':>5} {'FN':>5} {'TN':>5} "
+          f"{'acc':>7} {'prec':>7} {'recall':>7} {'spec':>7} {'F1':>7}")
+    print("-" * 66)
+    best_f1, best_t = -1.0, sweep[0]
+    for t in sweep:
+        tp, fp, fn, tn = confusion_at(img_top_score, img_has_gt, t)
+        acc, prec, rec, spec, f1 = derive_metrics(tp, fp, fn, tn)
+        if f1 > best_f1:
+            best_f1, best_t = f1, t
+        print(f"{t:>7.2f} {tp:>5} {fp:>5} {fn:>5} {tn:>5} "
+              f"{acc:>7.3f} {prec:>7.3f} {rec:>7.3f} {spec:>7.3f} {f1:>7.3f}")
+
+    thresh = chosen_thresh if chosen_thresh is not None else best_t
+    label  = "requested" if chosen_thresh is not None else "best-F1"
+    tp, fp, fn, tn = confusion_at(img_top_score, img_has_gt, thresh)
+    acc, prec, rec, spec, f1 = derive_metrics(tp, fp, fn, tn)
+
+    print(f"\nConfusion matrix @ score >= {thresh:.2f}  ({label} threshold)")
+    print("                     predicted")
+    print("                 anomaly   normal")
+    print(f"  actual anomaly {tp:>7} {fn:>8}")
+    print(f"  actual normal  {fp:>7} {tn:>8}")
+    print(f"\n  accuracy    {acc:.4f}   ({tp + tn}/{tp + fp + fn + tn} images correct)")
+    print(f"  precision   {prec:.4f}   (of images flagged, this fraction really was defective)")
+    print(f"  recall      {rec:.4f}   (of defective prints, this fraction was caught)")
+    print(f"  specificity {spec:.4f}   (of good prints, this fraction was left alone)")
+    print(f"  F1          {f1:.4f}")
+    print(f"\n  {fn} missed defect(s), {fp} false alarm(s)")
 
 
 def parse_args():
@@ -89,6 +188,13 @@ def parse_args():
     p.add_argument("--keep-empty",  action="store_true",
                    help="keep annotation-free images so detections on 'normal' "
                         "images count as false positives (must match train.py)")
+    p.add_argument("--decision-thresh", type=float, default=None,
+                   help="score threshold for the image-level confusion matrix "
+                        "(an image is flagged anomalous when its best detection "
+                        "clears it). Defaults to whichever swept threshold "
+                        "maximizes F1.")
+    p.add_argument("--no-image-level", action="store_true",
+                   help="skip the image-level confusion matrix and report only COCO mAP")
     return p.parse_args()
 
 
@@ -119,15 +225,26 @@ def main():
     print(f"Loaded checkpoint from epoch {ckpt.get('epoch', '?')}")
 
     print("Running inference...")
-    coco_results = run_evaluation(
+    coco_results, img_top_score, img_has_gt = run_evaluation(
         model, val_loader, val_ds, device,
         score_thresh=args.score_thresh,
         iou_thresh=args.iou_thresh,
     )
 
+    # Report image-level results first: "the model detected nothing" is a real
+    # (bad) outcome the confusion matrix should show, not a reason to bail out.
+    if not args.no_image_level:
+        print_image_level_report(img_top_score, img_has_gt, args.decision_thresh)
+
     if not coco_results:
-        print("No detections above score threshold — check your checkpoint or threshold.")
+        print("\nNo detections above score threshold — skipping COCO mAP. "
+              "Check your checkpoint, or lower --score-thresh.")
         return
+
+    if not args.no_image_level:
+        print("\n" + "=" * 66)
+        print("BOX-LEVEL LOCALIZATION  (COCO mAP)")
+        print("=" * 66)
 
     # Write results to a temp file and run COCOeval
     result_path = "coco_det_results.json"

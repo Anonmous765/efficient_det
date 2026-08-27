@@ -203,6 +203,32 @@ python evaluate.py \
 | `--score-thresh` | `0.05` | minimum confidence score kept before NMS |
 | `--iou-thresh` | `0.5` | NMS IoU threshold |
 | `--keep-empty` | off | include zero-annotation images (needed so false positives on Normal/negative images count in the anomaly pipeline) |
+| `--decision-thresh` | best F1 | score threshold for the image-level confusion matrix; defaults to whichever swept value maximizes F1 |
+| `--no-image-level` | off | skip the image-level confusion matrix and report only COCO mAP |
+
+`evaluate.py` reports two complementary things:
+
+**Box-level (COCO mAP)** — how well boxes are localized, the standard detection metric.
+
+**Image-level confusion matrix** — treats each image as one binary decision: *does this image contain an anomaly?* An image is flagged anomalous when its highest-scoring detection clears the decision threshold, and is truly anomalous when it carries at least one ground-truth box. This is the metric that matches how the model gets used in practice ("stop the print / don't stop the print"), and it only means anything when the negatives are present — so pass `--keep-empty`.
+
+It prints a sweep over decision thresholds, then a matrix at the best-F1 threshold (or `--decision-thresh`):
+
+```
+Confusion matrix @ score >= 0.45  (best-F1 threshold)
+                     predicted
+                 anomaly   normal
+  actual anomaly      52       11
+  actual normal        9      110
+
+  accuracy    0.8901
+  precision   0.8525   (of images flagged, this fraction really was defective)
+  recall      0.8254   (of defective prints, this fraction was caught)
+  specificity 0.9244   (of good prints, this fraction was left alone)
+  F1          0.8387
+```
+
+Read **recall** and **specificity** rather than accuracy: the anomaly test split is 63 anomaly / 119 normal, so a model that detects nothing at all still scores 65% accuracy. Precision/recall trade against each other as the threshold moves — lower it to miss fewer defects at the cost of more false alarms.
 
 Runs pycocotools' `COCOeval` and prints the standard COCO mAP summary (AP@[.5:.95], AP50, AP75, AP by size, AR).
 
