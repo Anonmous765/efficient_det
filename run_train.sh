@@ -32,7 +32,7 @@ RUN_EVAL="${RUN_EVAL:-1}"               # 1 = evaluate on the test split when do
 DRY_RUN="${DRY_RUN:-0}"                 # 1 = print the resolved commands, run nothing
 
 ANOMALY_DIR="${ANOMALY_DIR:-data/anomaly}"
-COCO_DIR="${COCO_DIR:-coco2017}"
+COCO_DIR="${COCO_DIR:-coco}"
 COCO_CKPT="${COCO_CKPT:-checkpoints_coco}"
 ANOMALY_CKPT="${ANOMALY_CKPT:-checkpoints_anomaly}"
 
@@ -99,12 +99,26 @@ check_anomaly_data() {
     echo "Anomaly data OK: $(ls "$ANOMALY_DIR/images" | wc -l) images"
 }
 
+# download_coco.py extracts to <root>/images/train2017, but a manually
+# assembled tree often has <root>/train2017 directly. Support both.
+COCO_TRAIN_DIR=""
+COCO_VAL_DIR=""
 check_coco_data() {
-    require_dir  "$COCO_DIR/train2017"
-    require_dir  "$COCO_DIR/val2017"
+    if   [ -d "$COCO_DIR/images/train2017" ]; then
+        COCO_TRAIN_DIR="$COCO_DIR/images/train2017"
+        COCO_VAL_DIR="$COCO_DIR/images/val2017"
+    elif [ -d "$COCO_DIR/train2017" ]; then
+        COCO_TRAIN_DIR="$COCO_DIR/train2017"
+        COCO_VAL_DIR="$COCO_DIR/val2017"
+    else
+        echo "MISSING: no train2017 under $COCO_DIR/images/ or $COCO_DIR/" >&2
+        echo "         set COCO_DIR=<root> to point at your COCO tree" >&2
+        exit 1
+    fi
+    require_dir  "$COCO_VAL_DIR"
     require_file "$COCO_DIR/annotations/instances_train2017.json"
     require_file "$COCO_DIR/annotations/instances_val2017.json"
-    echo "COCO data OK"
+    echo "COCO data OK: $COCO_TRAIN_DIR"
 }
 
 # ---- Training stages -------------------------------------------------------
@@ -112,9 +126,9 @@ train_coco() {
     check_coco_data
     echo ">>> Stage: COCO pretraining -> $COCO_CKPT"
     run "${LAUNCH[@]}" train.py \
-        --train-images "$COCO_DIR/train2017" \
+        --train-images "$COCO_TRAIN_DIR" \
         --train-ann    "$COCO_DIR/annotations/instances_train2017.json" \
-        --val-images   "$COCO_DIR/val2017" \
+        --val-images   "$COCO_VAL_DIR" \
         --val-ann      "$COCO_DIR/annotations/instances_val2017.json" \
         --phi "$PHI" \
         --epochs "$EPOCHS" \
