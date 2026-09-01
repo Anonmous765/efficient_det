@@ -34,8 +34,34 @@ def build_val_transforms(input_size: int):
     return Compose([Resize(input_size), ToTensor()])
 
 
+def unletterbox(boxes, orig_w, orig_h, size):
+    """Map boxes from the size x size letterboxed canvas back to original pixels.
+
+    dataset.transforms.Resize scales the long side to `size` and centre-pads the
+    short one, so the model predicts in that padded space. COCOeval compares
+    against the untouched annotation JSON, which is in original image pixels, so
+    predictions must be un-padded and un-scaled first. Without this every box is
+    off by the pad offset and the scale factor, and mAP is meaningless for any
+    image whose original size is not exactly size x size.
+    """
+    scale  = size / max(orig_w, orig_h)
+    new_w  = int(round(orig_w * scale))
+    new_h  = int(round(orig_h * scale))
+    pad_l  = (size - new_w) // 2
+    pad_t  = (size - new_h) // 2
+
+    boxes = boxes.clone()
+    boxes[:, [0, 2]] -= pad_l
+    boxes[:, [1, 3]] -= pad_t
+    boxes /= scale
+    boxes[:, [0, 2]] = boxes[:, [0, 2]].clamp(0, orig_w)
+    boxes[:, [1, 3]] = boxes[:, [1, 3]].clamp(0, orig_h)
+    return boxes
+
+
 @torch.no_grad()
-def run_evaluation(model, loader, dataset, device, score_thresh=0.05, iou_thresh=0.5):
+def run_evaluation(model, loader, dataset, device, input_size,
+                   score_thresh=0.05, iou_thresh=0.5):
     """Run inference over the loader.
 
     Returns (coco_results, img_top_score, img_has_gt):
@@ -72,6 +98,11 @@ def run_evaluation(model, loader, dataset, device, score_thresh=0.05, iou_thresh
             labels = det["labels"].cpu()  # (K,)
 
             img_top_score[img_id] = float(scores.max())
+
+            # Predictions live in the letterboxed canvas; COCOeval scores against
+            # the original-pixel annotations, so convert before writing results.
+            info  = dataset.coco.imgs[img_id]
+            boxes = unletterbox(boxes, info["width"], info["height"], input_size)
 
             # COCO expects (x1, y1, w, h)
             boxes_xywh = boxes.clone()
@@ -227,6 +258,7 @@ def main():
     print("Running inference...")
     coco_results, img_top_score, img_has_gt = run_evaluation(
         model, val_loader, val_ds, device,
+        input_size=config.input_resolution,
         score_thresh=args.score_thresh,
         iou_thresh=args.iou_thresh,
     )
