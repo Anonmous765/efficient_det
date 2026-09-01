@@ -10,6 +10,7 @@
 #
 # Every knob below can be overridden from the environment, e.g.
 #   EPOCHS=100 BATCH_SIZE=32 ./run_train.sh
+#   FREEZE_BACKBONE=1 ./run_train.sh anomaly   # train only BiFPN+heads (150k params)
 #
 # GPU count is detected automatically: 1 GPU runs `python`, more runs `torchrun`
 # with the learning rate scaled by the number of ranks.
@@ -27,7 +28,7 @@ WORKERS="${WORKERS:-8}"                 # PER GPU
 PATIENCE="${PATIENCE:-10}"
 BASE_LR="${BASE_LR:-1e-4}"              # for from-scratch runs
 FINETUNE_LR="${FINETUNE_LR:-5e-5}"      # for --init-from runs
-FREEZE_BACKBONE="${FREEZE_BACKBONE:-1}" # 1 = pass --freeze-backbone in transfer mode
+FREEZE_BACKBONE="${FREEZE_BACKBONE:-}"  # 1/0; unset = mode default (see below)
 RUN_EVAL="${RUN_EVAL:-1}"               # 1 = evaluate on the test split when done
 DRY_RUN="${DRY_RUN:-0}"                 # 1 = print the resolved commands, run nothing
 
@@ -35,6 +36,21 @@ ANOMALY_DIR="${ANOMALY_DIR:-data/anomaly}"
 COCO_DIR="${COCO_DIR:-coco}"
 COCO_CKPT="${COCO_CKPT:-checkpoints_coco}"
 ANOMALY_CKPT="${ANOMALY_CKPT:-checkpoints_anomaly}"
+
+# ---- Backbone freezing -----------------------------------------------------
+# The backbone is 96% of the model (3.70M of 3.85M params at phi 0) and is
+# already ImageNet-pretrained by timm. Freezing it drops trainable params to
+# 150k, which is the main lever against overfitting on ~1.9k images.
+#
+# Default on for transfer (the standard fine-tuning recipe, and the pretrained
+# features are the whole point of --init-from) and off for a direct anomaly run
+# so the plain command stays a full fine-tune. FREEZE_BACKBONE=1/0 overrides.
+if [ -z "$FREEZE_BACKBONE" ]; then
+    case "$MODE" in
+        transfer|all) FREEZE_BACKBONE=1 ;;
+        *)            FREEZE_BACKBONE=0 ;;
+    esac
+fi
 
 # ---- GPU selection ---------------------------------------------------------
 # This box is 4x RTX A5000 on plain PCIe (no NVLink), so NCCL peer-to-peer is
@@ -76,6 +92,7 @@ echo " NCCL_P2P      : disabled=$NCCL_P2P_DISABLE"
 echo " phi           : $PHI"
 echo " batch/GPU     : $BATCH_SIZE   (effective $((BATCH_SIZE * (NGPU > 0 ? NGPU : 1))))"
 echo " lr            : scratch=$BASE_LR  finetune=$FINETUNE_LR"
+echo " freeze bbone  : $FREEZE_BACKBONE   (trainable: $([ "$FREEZE_BACKBONE" = "1" ] && echo "150k BiFPN+heads" || echo "3.85M all"))"
 echo " epochs        : $EPOCHS"
 echo "=========================================================="
 
@@ -145,11 +162,15 @@ train_anomaly() {
     if [ "${1:-scratch}" = "transfer" ]; then
         require_file "$COCO_CKPT/best.pth"
         extra+=(--init-from "$COCO_CKPT/best.pth" --lr "$FINETUNE_LR")
-        [ "$FREEZE_BACKBONE" = "1" ] && extra+=(--freeze-backbone)
         echo ">>> Stage: anomaly fine-tune from $COCO_CKPT/best.pth -> $ANOMALY_CKPT"
     else
         extra+=(--lr "$BASE_LR")
         echo ">>> Stage: anomaly from scratch -> $ANOMALY_CKPT"
+    fi
+    # Applies to both paths: freezing is just as useful without --init-from,
+    # since the backbone carries ImageNet weights on every run.
+    if [ "$FREEZE_BACKBONE" = "1" ]; then
+        extra+=(--freeze-backbone)
     fi
 
     # --keep-empty keeps the ~50% "Normal" images as negatives; without it they
