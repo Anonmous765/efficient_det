@@ -162,7 +162,14 @@ train_anomaly() {
     check_anomaly_data
     local extra=()
     if [ "${1:-scratch}" = "transfer" ]; then
-        require_file "$COCO_CKPT/best.pth"
+        # In "all", stage 1 produces this checkpoint, so under DRY_RUN it does not
+        # exist yet -- note it and carry on so stage 2's command is still shown.
+        if [ "$DRY_RUN" = "1" ] && [ "$MODE" = "all" ]; then
+            [ -f "$COCO_CKPT/best.pth" ] || \
+                echo "  (dry-run: $COCO_CKPT/best.pth will be created by stage 1)"
+        else
+            require_file "$COCO_CKPT/best.pth"
+        fi
         extra+=(--init-from "$COCO_CKPT/best.pth" --lr "$FINETUNE_LR")
         echo ">>> Stage: anomaly fine-tune from $COCO_CKPT/best.pth -> $ANOMALY_CKPT"
     else
@@ -197,7 +204,12 @@ train_anomaly() {
 eval_anomaly() {
     [ "$RUN_EVAL" = "1" ] || return 0
     check_anomaly_data
-    require_file "$ANOMALY_CKPT/best.pth"
+    if [ "$DRY_RUN" = "1" ] && [ "$MODE" != "eval" ]; then
+        [ -f "$ANOMALY_CKPT/best.pth" ] || \
+            echo "  (dry-run: $ANOMALY_CKPT/best.pth will be created by training)"
+    else
+        require_file "$ANOMALY_CKPT/best.pth"
+    fi
     echo ""
     echo ">>> Evaluating $ANOMALY_CKPT/best.pth on the anomaly test split"
     # --split all because instances_test.json IS the test split already;
