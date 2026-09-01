@@ -52,7 +52,7 @@ Thumbs.db
 coco/
 coco2017/
 data/
-checkpoints/
+checkpoints*/
 predictions/
 coco_det_results.json
 *.txt
