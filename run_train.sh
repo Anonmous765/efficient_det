@@ -7,6 +7,8 @@
 #   ./run_train.sh coco            # stage 1: pretrain on MS COCO 2017
 #   ./run_train.sh transfer        # stage 2: anomaly, warm-started from the COCO run
 #   ./run_train.sh all             # coco, then transfer
+#   ./run_train.sh eval            # score an existing checkpoint, train nothing
+#                                  #   ANOMALY_CKPT=checkpoints ./run_train.sh eval
 #
 # Every knob below can be overridden from the environment, e.g.
 #   EPOCHS=100 BATCH_SIZE=32 ./run_train.sh
@@ -194,6 +196,8 @@ train_anomaly() {
 
 eval_anomaly() {
     [ "$RUN_EVAL" = "1" ] || return 0
+    check_anomaly_data
+    require_file "$ANOMALY_CKPT/best.pth"
     echo ""
     echo ">>> Evaluating $ANOMALY_CKPT/best.pth on the anomaly test split"
     # --split all because instances_test.json IS the test split already;
@@ -213,7 +217,8 @@ case "$MODE" in
     coco)     train_coco ;;
     transfer) train_anomaly transfer ; eval_anomaly ;;
     all)      train_coco ; train_anomaly transfer ; eval_anomaly ;;
-    *) echo "Unknown mode: $MODE (expected anomaly|coco|transfer|all)" >&2; exit 1 ;;
+    eval)     RUN_EVAL=1 ; eval_anomaly ;;
+    *) echo "Unknown mode: $MODE (expected anomaly|coco|transfer|all|eval)" >&2; exit 1 ;;
 esac
 
 echo ""
