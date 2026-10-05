@@ -16,8 +16,6 @@ Usage:
         --workers 4
 """
 import argparse
-import json
-import os
 
 import torch
 from torch.utils.data import DataLoader
@@ -287,12 +285,8 @@ def main():
         print("BOX-LEVEL LOCALIZATION  (COCO mAP)")
         print("=" * 66)
 
-    # Write results to a temp file and run COCOeval
-    result_path = "coco_det_results.json"
-    with open(result_path, "w") as f:
-        json.dump(coco_results, f)
-
-    coco_dt = val_ds.coco.loadRes(result_path)
+    # loadRes takes the results list directly, so no temp file is needed.
+    coco_dt = val_ds.coco.loadRes(coco_results)
     coco_eval = COCOeval(val_ds.coco, coco_dt, "bbox")
     # Restrict scoring to the evaluated split; otherwise the annotation file's
     # other images (e.g. the ~112k train images) count as missed detections.
@@ -300,8 +294,6 @@ def main():
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
-
-    os.remove(result_path)
 
 
 if __name__ == "__main__":
