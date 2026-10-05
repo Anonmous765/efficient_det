@@ -22,10 +22,17 @@ def apply_nms(
     iou_thresh:   float = 0.5,
     max_dets:     int   = 100,
 ):
-    """
+    """Turn raw model outputs into per-image detections.
+
+    Scores each anchor by its best class, drops scores <= score_thresh, runs
+    per-class NMS at iou_thresh, and keeps the top max_dets by score.
+
     class_preds : (B, N, num_classes)  raw logits (pre-sigmoid)
     box_preds   : (B, N, 4)            raw deltas
     anchors     : (N, 4)               (cx, cy, w, h) absolute pixels
+
+    Returns a list of B dicts in the format described in the module docstring.
+    Boxes are in the model's input (letterboxed) pixel space.
     """
     B = class_preds.shape[0]
     scores_all = class_preds.sigmoid()  # (B, N, C)

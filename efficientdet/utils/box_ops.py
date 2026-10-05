@@ -1,3 +1,9 @@
+"""
+Box format conversions and anchor-relative delta encoding/decoding.
+
+Formats: "cxcywh" is (centre x, centre y, width, height); "xyxy" is
+(x1, y1, x2, y2). Both are in absolute pixels.
+"""
 import torch
 
 

@@ -31,6 +31,7 @@ from dataset.transforms import Compose, Resize, ToTensor
 
 
 def build_val_transforms(input_size: int):
+    """Deterministic eval preprocessing: letterbox to input_size, then normalize."""
     return Compose([Resize(input_size), ToTensor()])
 
 
@@ -154,6 +155,12 @@ def derive_metrics(tp, fp, fn, tn):
 
 
 def print_image_level_report(img_top_score, img_has_gt, chosen_thresh=None):
+    """Print the threshold sweep and the confusion matrix for the image-level decision.
+
+    Uses chosen_thresh when given, otherwise the swept threshold with the best
+    F1. Choosing the threshold on the split being scored inflates the result,
+    so for a test-set number pass a threshold picked on val.
+    """
     n_pos = sum(1 for v in img_has_gt.values() if v)
     n_neg = len(img_has_gt) - n_pos
 
@@ -201,6 +208,7 @@ def print_image_level_report(img_top_score, img_has_gt, chosen_thresh=None):
 
 
 def parse_args():
+    """Command-line flags; see the module docstring and README for usage."""
     p = argparse.ArgumentParser()
     p.add_argument("--images",      default="coco2017/train2017")
     p.add_argument("--ann",         default="coco2017/annotations/instances_train2017.json")
@@ -230,6 +238,7 @@ def parse_args():
 
 
 def main():
+    """Load the checkpoint, run inference, and print the image-level and COCO mAP reports."""
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

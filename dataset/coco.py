@@ -1,10 +1,14 @@
 """
-MS COCO 2017 dataset class for EfficientDet.
+COCO-format detection dataset for EfficientDet.
+
+Used for both MS COCO 2017 and the custom anomaly dataset (which is written in
+COCO format by prepare_anomaly_data.py).
 
 Returns per-sample:
     image    : FloatTensor[3, H, W]
-    gt_boxes : FloatTensor[M, 4]  (cx, cy, w, h) absolute pixels
+    gt_boxes : FloatTensor[M, 4]  (cx, cy, w, h) absolute pixels, after transforms
     gt_labels: LongTensor[M]      0-indexed class ids
+    img_id   : int                COCO image id (used to match predictions to annotations)
 """
 import os
 import random
@@ -18,6 +22,12 @@ from efficientdet.utils.box_ops import xyxy_to_cxcywh
 
 
 class CocoDataset(Dataset):
+    """Images and boxes from a COCO annotation file, with an optional train/test carve-out.
+
+    COCO category ids (sparse, 1-indexed) are remapped to contiguous 0-indexed
+    labels. Use label_to_cat_id to map predictions back for COCOeval.
+    """
+
     def __init__(self, root: str, ann_file: str, transforms=None,
                  split=None, test_fraction: float = 0.05, seed: int = 42,
                  keep_empty: bool = False):
@@ -80,6 +90,7 @@ class CocoDataset(Dataset):
         return len(self.ids)
 
     def __getitem__(self, idx):
+        """Load image idx, apply transforms, and return (image, boxes_cxcywh, labels, img_id)."""
         img_id = self.ids[idx]
         img_info = self.coco.imgs[img_id]
         path = os.path.join(self.root, img_info["file_name"])
@@ -115,4 +126,5 @@ class CocoDataset(Dataset):
         return image, boxes, labels, img_id
 
     def get_num_classes(self) -> int:
+        """Number of categories in the annotation file (the model's num_classes)."""
         return self.num_classes

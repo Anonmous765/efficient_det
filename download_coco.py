@@ -27,6 +27,7 @@ URLS = {
 
 
 def _progress(block_count, block_size, total_size):
+    """urlretrieve report hook: print downloaded MB and percent on one updating line."""
     downloaded = block_count * block_size
     if total_size > 0:
         pct = min(downloaded / total_size * 100, 100)
@@ -35,6 +36,12 @@ def _progress(block_count, block_size, total_size):
 
 
 def download_and_extract(url: str, dest_dir: str):
+    """Download a zip into dest_dir (unless already there), extract it, then delete the zip.
+
+    A leftover file that is not a valid zip (an interrupted download) is
+    removed and fetched again, and an interrupted download cleans up its
+    partial file.
+    """
     os.makedirs(dest_dir, exist_ok=True)
     filename = os.path.join(dest_dir, url.split("/")[-1])
 
@@ -62,6 +69,7 @@ def download_and_extract(url: str, dest_dir: str):
 
 
 def main():
+    """Parse CLI flags and fetch annotations, train2017, val2017 and (optionally) test2017."""
     p = argparse.ArgumentParser()
     p.add_argument("--dest",    default="coco", help="root directory for the dataset")
     p.add_argument("--no-test", action="store_true", help="skip test2017 images (~6 GB)")

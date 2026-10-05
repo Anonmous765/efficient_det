@@ -44,6 +44,7 @@ FALLBACK_SUBDIRS = ("default", "train", "val", "test")
 
 
 def parse_args():
+    """Command-line flags: input locations and the output directory."""
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--result-json", default="result.json",
@@ -79,6 +80,7 @@ def scan_split_folders(full_dataset):
 
 
 def find_fallback(basename, fallback_root):
+    """Return the first path to basename under fallback_root/FALLBACK_SUBDIRS, or "" if absent."""
     for sub in FALLBACK_SUBDIRS:
         cand = os.path.join(fallback_root, sub, basename)
         if os.path.exists(cand):
@@ -87,6 +89,7 @@ def find_fallback(basename, fallback_root):
 
 
 def main():
+    """Build the flattened image folder and the per-split COCO JSONs (steps in module docstring)."""
     args = parse_args()
 
     with open(args.result_json) as f:
@@ -122,6 +125,7 @@ def main():
     fallback_used = 0
 
     def copy_in(src, basename):
+        """Copy src into the flat image folder unless a file of that name is already there."""
         nonlocal copied
         dst = os.path.join(img_dir, basename)
         if not os.path.exists(dst):

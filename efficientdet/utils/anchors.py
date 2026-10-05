@@ -1,3 +1,10 @@
+"""
+Anchor-box generation for the five pyramid levels P3-P7.
+
+Each feature-map location gets 9 anchors (3 scales x 3 aspect ratios), centred on
+the location and sized as stride * anchor_scale * scale, so they grow with the
+level's stride.
+"""
 import math
 from typing import Dict, List, Tuple, Union
 
@@ -6,6 +13,19 @@ import torch.nn as nn
 
 
 class AnchorGenerator(nn.Module):
+    """Builds, and caches, the anchor grid for a given set of feature-map sizes.
+
+    Anchors are ordered level by level, then row-major over locations, then
+    over the 9 anchors per location. This matches how EfficientDet flattens
+    the head outputs, so anchor i lines up with prediction i.
+
+    Args:
+        scales        : size multipliers within an octave
+        aspect_ratios : width/height ratios
+        anchor_scale  : base anchor size as a multiple of the level stride
+        strides       : stride of P3-P7 relative to the input image
+    """
+
     def __init__(
         self,
         scales: Tuple[float, ...] = (1.0, 2**(1/3), 2**(2/3)),

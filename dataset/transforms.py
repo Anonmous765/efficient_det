@@ -16,6 +16,8 @@ import torchvision.transforms as T
 
 
 class Compose:
+    """Apply a list of joint transforms in order."""
+
     def __init__(self, transforms):
         self.transforms = transforms
 
@@ -61,6 +63,8 @@ class Resize:
 
 
 class RandomHorizontalFlip:
+    """Mirror the image left-right with probability p, flipping box x-coordinates to match."""
+
     def __init__(self, p: float = 0.5):
         self.p = p
 

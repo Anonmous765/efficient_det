@@ -1,4 +1,10 @@
-# efficientdet/utils/matcher.py
+"""
+Anchor-to-ground-truth matching, which turns annotations into per-anchor training targets.
+
+Each anchor is assigned to the GT box it overlaps most. IoU >= pos_thresh makes it
+a positive, IoU < neg_thresh makes it background, and anything in between is
+ignored.
+"""
 import torch
 from efficientdet.utils.box_ops import cxcywh_to_xyxy, encode_boxes
 
@@ -25,7 +31,8 @@ def box_iou(a, b):
 @torch.no_grad()   # matching produces targets — no gradients needed
 def match_anchors(anchors, gt_boxes, gt_labels,
                   num_classes, pos_thresh=0.5, neg_thresh=0.4):
-    """
+    """Build classification and box targets for one image.
+
     anchors   : (N, 4)  cxcywh
     gt_boxes  : (M, 4)  cxcywh
     gt_labels : (M,)    long, 0-indexed class ids
@@ -33,8 +40,11 @@ def match_anchors(anchors, gt_boxes, gt_labels,
     returns:
         positive_mask : (N,)    bool
         ignore_mask   : (N,)    bool
-        cls_targets   : (N, C)  float, one-hot
-        box_targets   : (N, 4)  float, encoded deltas
+        cls_targets   : (N, C)  float, one-hot for positives, all 0 for background,
+                                all -1 for ignored anchors (callers must handle it)
+        box_targets   : (N, 4)  float, encoded deltas (zeros except for positives)
+
+    An image with no GT boxes (a "normal" negative) gets every anchor as background.
     """
     N = anchors.shape[0]
     device = anchors.device

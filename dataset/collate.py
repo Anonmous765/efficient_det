@@ -14,6 +14,7 @@ import torch
 
 
 def collate_fn(batch):
+    """Stack images into one tensor and keep per-image boxes, labels, and ids as lists."""
     images, gt_boxes, gt_labels, img_ids = zip(*batch)
     images = torch.stack(images, dim=0)
     return images, list(gt_boxes), list(gt_labels), list(img_ids)

@@ -1,3 +1,4 @@
+"""Depthwise-separable convolution block used in the BiFPN."""
 import torch.nn as nn
 
 
@@ -26,6 +27,7 @@ class DepthwiseSeparableConv(nn.Module):
         self.activation = nn.SiLU()
 
     def forward(self, x):
+        """(B, in_channels, H, W) -> (B, out_channels, H, W)."""
         x = self.depthwise(x)
         x = self.pointwise(x)
         x = self.batch_norm(x)

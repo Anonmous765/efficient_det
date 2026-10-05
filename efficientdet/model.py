@@ -1,3 +1,14 @@
+"""
+The full EfficientDet detector: backbone -> BiFPN -> class/box heads, plus anchors.
+
+The model returns raw outputs (logits and box deltas) together with the anchor
+grid. Training turns them into a loss via efficientdet.utils.matcher and
+efficientdet.utils.loss; inference turns them into detections via
+efficientdet.utils.nms.apply_nms.
+
+Run directly (`python -m efficientdet.model`) to print the output shapes for a
+512x512 input.
+"""
 import torch
 import torch.nn as nn
 
@@ -9,6 +20,14 @@ from efficientdet.utils.anchors import AnchorGenerator
 
 
 class EfficientDet(nn.Module):
+    """EfficientDet object detector.
+
+    Args:
+        config      : EfficientDetConfig giving the compound-scaled dimensions
+        num_classes : number of object classes
+        num_anchors : anchors per feature-map location (must match AnchorGenerator)
+    """
+
     def __init__(self, config: EfficientDetConfig, num_classes: int, num_anchors: int = 9):
         super().__init__()
         self.backbone = EfficientDetBackbone(config)
@@ -20,6 +39,16 @@ class EfficientDet(nn.Module):
         self.num_anchors = num_anchors
 
     def forward(self, x):
+        """Run the detector on a batch of images.
+
+        x : (B, 3, H, W) normalized images, H = W = config.input_resolution
+
+        Returns:
+            class_preds : (B, N, num_classes) raw logits (apply sigmoid for scores)
+            box_preds   : (B, N, 4)           raw deltas relative to the anchors
+            anchors     : (N, 4)              (cx, cy, w, h) in input pixels
+        where N is the total number of anchors across P3-P7.
+        """
         p3, p4, p5, p6, p7 = self.backbone(x)
         p3, p4, p5, p6, p7 = self.bifpn(p3, p4, p5, p6, p7)
         features = [p3, p4, p5, p6, p7]

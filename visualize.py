@@ -57,6 +57,7 @@ def draw_boxes(draw, boxes, labels, label_to_name, color, scores=None):
 
 
 def parse_args():
+    """Command-line flags; see the module docstring for usage."""
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint",   default="checkpoints/best.pth")
     p.add_argument("--images",       default="coco2017/train2017")
@@ -79,6 +80,7 @@ def parse_args():
 
 @torch.no_grad()
 def main():
+    """Run the model on the first --num-images images of the split and save annotated PNGs."""
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -1,5 +1,10 @@
 """
-EfficientDet training on MS COCO 2017.
+EfficientDet training, for both MS COCO 2017 and the custom anomaly dataset.
+
+Trains with AdamW + cosine LR decay and bf16 autocast, validates each epoch,
+and writes last.pth / best.pth (lowest val loss), loss_history.json, and
+loss_curve.png to --checkpoint-dir. For the anomaly data, pass --keep-empty and
+--test-fraction 0 (see run_train.sh).
 
 Usage:
     python train.py \
@@ -103,6 +108,7 @@ def all_reduce_mean(value: float, device) -> float:
 # ---------------------------------------------------------------------------
 
 def build_transforms(input_size: int, train: bool):
+    """Letterbox + normalize; training also adds a random horizontal flip and colour jitter."""
     if train:
         return Compose([
             Resize(input_size),
@@ -147,6 +153,7 @@ def build_batch_targets(gt_boxes_list, gt_labels_list, anchors, num_classes, dev
 
 
 def save_checkpoint(path, epoch, model, optimizer, val_loss):
+    """Save model/optimizer state with the (0-indexed) epoch and its val loss."""
     torch.save({
         "epoch":           epoch,
         "model_state":     model.state_dict(),
@@ -215,6 +222,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device, amp, num_classe
 
 @torch.no_grad()
 def validate(model, loader, criterion, device, amp, num_classes):
+    """Mean loss over the validation loader (averaged across ranks under DDP)."""
     model.eval()
     total_loss = 0.0
 
@@ -236,6 +244,7 @@ def validate(model, loader, criterion, device, amp, num_classes):
 # ---------------------------------------------------------------------------
 
 def parse_args():
+    """Command-line flags; see the README for the full table."""
     p = argparse.ArgumentParser()
     p.add_argument("--train-images",   default="coco2017/train2017")
     p.add_argument("--train-ann",      default="coco2017/annotations/instances_train2017.json")
@@ -287,6 +296,7 @@ def parse_args():
 
 
 def main():
+    """Set up data, model and (optionally) DDP, then run the epoch loop with checkpointing."""
     args = parse_args()
     if args.resume and args.init_from:
         raise SystemExit("--resume and --init-from are mutually exclusive")

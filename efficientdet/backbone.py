@@ -1,3 +1,9 @@
+"""
+EfficientNet backbone that produces the five-level feature pyramid P3-P7.
+
+Run directly (`python -m efficientdet.backbone`) to print the feature-map
+shapes for a 512x512 input.
+"""
 import torch
 import torch.nn as nn
 import timm
@@ -6,6 +12,12 @@ from efficientdet.config import EfficientDetConfig
 
 
 class EfficientDetBackbone(nn.Module):
+    """ImageNet-pretrained EfficientNet (via timm) plus the extra P6/P7 levels.
+
+    Takes the stride-8/16/32 stages (C3-C5), projects each to
+    `config.out_channels` with a 1x1 conv + BN, and builds P6 and P7 by
+    downsampling P5 twice with stride-2 3x3 convs.
+    """
     FEATURE_INDICES = (2, 3, 4)
 
     def __init__(self, config: EfficientDetConfig):
@@ -40,6 +52,7 @@ class EfficientDetBackbone(nn.Module):
         )
 
     def forward(self, x):
+        """x: (B, 3, H, W) -> (p3, p4, p5, p6, p7), strides 8-128, each with out_channels."""
         c3, c4, c5 = self.backbone(x)
         p3 = self.proj[0](c3)
         p4 = self.proj[1](c4)
