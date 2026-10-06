@@ -2,7 +2,7 @@
 Download and extract MS COCO 2017 into ./coco/
 
 Run once before training:
-    python download_coco.py
+    python data_prep/download_coco.py
 
 Sizes (approximate):
     train2017 images  : 18 GB

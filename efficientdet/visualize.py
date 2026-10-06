@@ -7,14 +7,14 @@ boxes are drawn in green. By default it pulls from the held-out test split of
 train2017 — the same slice train.py never trains on.
 
 Usage:
-    python visualize.py \
-        --checkpoint checkpoints/best.pth \
+    python -m efficientdet.visualize \
+        --checkpoint efficientdet/checkpoints/best.pth \
         --images     coco2017/train2017 \
         --ann        coco2017/annotations/instances_train2017.json \
         --split      test \
         --num-images 12 \
         --score-thresh 0.3 \
-        --out-dir    predictions
+        --out-dir    efficientdet/predictions
 """
 import argparse
 import os
@@ -26,8 +26,8 @@ from efficientdet import EfficientDet, EfficientDetConfig
 from efficientdet.utils.nms import apply_nms
 from efficientdet.utils.box_ops import cxcywh_to_xyxy
 
-from dataset import CocoDataset
-from dataset.transforms import Compose, Resize, ToTensor
+from efficientdet.dataset import CocoDataset
+from efficientdet.dataset.transforms import Compose, Resize, ToTensor
 
 
 # ImageNet stats used by dataset.transforms.ToTensor — needed to invert
@@ -59,7 +59,7 @@ def draw_boxes(draw, boxes, labels, label_to_name, color, scores=None):
 def parse_args():
     """Command-line flags; see the module docstring for usage."""
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint",   default="checkpoints/best.pth")
+    p.add_argument("--checkpoint",   default="efficientdet/checkpoints/best.pth")
     p.add_argument("--images",       default="coco2017/train2017")
     p.add_argument("--ann",          default="coco2017/annotations/instances_train2017.json")
     p.add_argument("--split",        default="test", choices=["test", "train", "all"],
@@ -74,7 +74,7 @@ def parse_args():
     p.add_argument("--iou-thresh",   type=float, default=0.5)
     p.add_argument("--no-gt",        action="store_true",
                    help="don't draw ground-truth boxes (predictions only)")
-    p.add_argument("--out-dir",      default="predictions")
+    p.add_argument("--out-dir",      default="efficientdet/predictions")
     return p.parse_args()
 
 

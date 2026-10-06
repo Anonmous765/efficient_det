@@ -1,5 +1,5 @@
 """
-Prepare the custom 3D-print anomaly dataset for the EfficientDet pipeline.
+Prepare the custom 3D-print anomaly dataset (shared by every architecture in this repo).
 
 Two sources are combined:
 
@@ -22,7 +22,7 @@ The script:
 
 Then train / evaluate with the ``--keep-empty`` flag so the negatives are used:
 
-    python train.py \
+    python -m efficientdet.train \
         --train-images data/anomaly/images \
         --train-ann    data/anomaly/annotations/instances_train.json \
         --val-images   data/anomaly/images \

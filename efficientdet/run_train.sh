@@ -2,23 +2,25 @@
 #
 # Train EfficientDet on the custom 3D-print anomaly dataset.
 #
-#   ./run_train.sh                 # from scratch on the anomaly data (default)
-#   ./run_train.sh anomaly         # same, explicit
-#   ./run_train.sh coco            # stage 1: pretrain on MS COCO 2017
-#   ./run_train.sh transfer        # stage 2: anomaly, warm-started from the COCO run
-#   ./run_train.sh all             # coco, then transfer
-#   ./run_train.sh eval            # score an existing checkpoint, train nothing
-#                                  #   ANOMALY_CKPT=checkpoints ./run_train.sh eval
+#   efficientdet/run_train.sh                 # from scratch on the anomaly data (default)
+#   efficientdet/run_train.sh anomaly         # same, explicit
+#   efficientdet/run_train.sh coco            # stage 1: pretrain on MS COCO 2017
+#   efficientdet/run_train.sh transfer        # stage 2: anomaly, warm-started from the COCO run
+#   efficientdet/run_train.sh all             # coco, then transfer
+#   efficientdet/run_train.sh eval            # score an existing checkpoint, train nothing
+#                                             #   ANOMALY_CKPT=efficientdet/checkpoints efficientdet/run_train.sh eval
 #
 # Every knob below can be overridden from the environment, e.g.
-#   EPOCHS=100 BATCH_SIZE=32 ./run_train.sh
-#   FREEZE_BACKBONE=1 ./run_train.sh anomaly   # train only BiFPN+heads (150k params)
+#   EPOCHS=100 BATCH_SIZE=32 efficientdet/run_train.sh
+#   FREEZE_BACKBONE=1 efficientdet/run_train.sh anomaly   # train only BiFPN+heads (150k params)
 #
 # GPU count is detected automatically: 1 GPU runs `python`, more runs `torchrun`
 # with the learning rate scaled by the number of ranks.
 
 set -euo pipefail
-cd "$(dirname "$0")"
+# Run from the repo root: the datasets live there and the Python entry points
+# are invoked as modules of the efficientdet package.
+cd "$(dirname "$0")/.."
 
 MODE="${1:-anomaly}"
 
@@ -36,8 +38,8 @@ DRY_RUN="${DRY_RUN:-0}"                 # 1 = print the resolved commands, run n
 
 ANOMALY_DIR="${ANOMALY_DIR:-data/anomaly}"
 COCO_DIR="${COCO_DIR:-coco}"
-COCO_CKPT="${COCO_CKPT:-checkpoints_coco}"
-ANOMALY_CKPT="${ANOMALY_CKPT:-checkpoints_anomaly}"
+COCO_CKPT="${COCO_CKPT:-efficientdet/checkpoints_coco}"
+ANOMALY_CKPT="${ANOMALY_CKPT:-efficientdet/checkpoints_anomaly}"
 
 # ---- Backbone freezing -----------------------------------------------------
 # The backbone is 96% of the model (3.70M of 3.85M params at phi 0) and is
@@ -144,7 +146,7 @@ check_coco_data() {
 train_coco() {
     check_coco_data
     echo ">>> Stage: COCO pretraining -> $COCO_CKPT"
-    run "${LAUNCH[@]}" train.py \
+    run "${LAUNCH[@]}" -m efficientdet.train \
         --train-images "$COCO_TRAIN_DIR" \
         --train-ann    "$COCO_DIR/annotations/instances_train2017.json" \
         --val-images   "$COCO_VAL_DIR" \
@@ -185,7 +187,7 @@ train_anomaly() {
     # --keep-empty keeps the ~50% "Normal" images as negatives; without it they
     # are silently dropped. --test-fraction 0 disables the random carve-out,
     # since this dataset ships its own instances_test.json.
-    run "${LAUNCH[@]}" train.py \
+    run "${LAUNCH[@]}" -m efficientdet.train \
         --train-images "$ANOMALY_DIR/images" \
         --train-ann    "$ANOMALY_DIR/annotations/instances_train.json" \
         --val-images   "$ANOMALY_DIR/images" \
@@ -214,7 +216,7 @@ eval_anomaly() {
     echo ">>> Evaluating $ANOMALY_CKPT/best.pth on the anomaly test split"
     # --split all because instances_test.json IS the test split already;
     # --split test would re-carve a 5% slice out of it.
-    run python3 evaluate.py \
+    run python3 -m efficientdet.evaluate \
         --images "$ANOMALY_DIR/images" \
         --ann    "$ANOMALY_DIR/annotations/instances_test.json" \
         --split all \

@@ -29,11 +29,9 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
-testing/testing.ipynb
+efficientdet/testing/
 expand_example.py
 reshape_example.py
-testing/demo_anchors_ops.py
-testing/test_stack.py
 # Logs and local environment files
 *.log
 .env

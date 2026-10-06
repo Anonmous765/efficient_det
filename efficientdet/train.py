@@ -7,7 +7,7 @@ loss_curve.png to --checkpoint-dir. For the anomaly data, pass --keep-empty and
 --test-fraction 0 (see run_train.sh).
 
 Usage:
-    python train.py \
+    python -m efficientdet.train \
         --train-images coco/images/train2017 \
         --train-ann    coco/annotations/instances_train2017.json \
         --val-images   coco/images/val2017 \
@@ -17,11 +17,11 @@ Usage:
         --batch-size 8 \
         --lr 1e-4 \
         --workers 4 \
-        --checkpoint-dir checkpoints
+        --checkpoint-dir efficientdet/checkpoints
 
 Multi-GPU (DistributedDataParallel), one process per GPU via torchrun:
 
-    torchrun --nproc_per_node=4 train.py --batch-size 8 ...
+    torchrun --nproc_per_node=4 -m efficientdet.train --batch-size 8 ...
 
     --batch-size and --workers are PER GPU, so the example above trains on an
     effective batch of 32. Scale --lr accordingly. Every rank runs this same
@@ -48,8 +48,8 @@ from efficientdet import EfficientDet, EfficientDetConfig
 from efficientdet.utils.loss import EfficientDetLoss
 from efficientdet.utils.matcher import match_anchors
 
-from dataset import CocoDataset, collate_fn
-from dataset.transforms import Compose, Resize, RandomHorizontalFlip, ColorJitter, ToTensor
+from efficientdet.dataset import CocoDataset, collate_fn
+from efficientdet.dataset.transforms import Compose, Resize, RandomHorizontalFlip, ColorJitter, ToTensor
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def setup_distributed(timeout_s: int):
     """Join the process group when launched under torchrun.
 
     torchrun sets RANK / WORLD_SIZE / LOCAL_RANK in the environment; their
-    absence means a plain `python train.py`, so we report single-process
+    absence means a plain `python -m efficientdet.train`, so we report single-process
     values and never touch torch.distributed.
 
     Returns (distributed, rank, world_size, local_rank).
@@ -266,7 +266,7 @@ def parse_args():
     p.add_argument("--weight-decay",   type=float, default=1e-4)
     p.add_argument("--workers",        type=int,   default=4,
                    help="dataloader workers PER GPU process")
-    p.add_argument("--checkpoint-dir", default="checkpoints")
+    p.add_argument("--checkpoint-dir", default="efficientdet/checkpoints")
     p.add_argument("--resume",         default=None, help="path to checkpoint to resume from")
     p.add_argument("--init-from",      default=None,
                    help="load matching-shape weights from a checkpoint (e.g. a COCO-pretrained "

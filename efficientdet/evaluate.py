@@ -6,11 +6,11 @@ the same slice train.py excludes from training. test_fraction / split_seed must
 match the values used during training for the split to line up.
 
 Usage:
-    python evaluate.py \
+    python -m efficientdet.evaluate \
         --images       coco2017/train2017 \
         --ann          coco2017/annotations/instances_train2017.json \
         --split        test \
-        --checkpoint   checkpoints/best.pth \
+        --checkpoint   efficientdet/checkpoints/best.pth \
         --phi 0 \
         --batch-size 8 \
         --workers 4
@@ -24,8 +24,8 @@ from pycocotools.cocoeval import COCOeval
 from efficientdet import EfficientDet, EfficientDetConfig
 from efficientdet.utils.nms import apply_nms
 
-from dataset import CocoDataset, collate_fn
-from dataset.transforms import Compose, Resize, ToTensor
+from efficientdet.dataset import CocoDataset, collate_fn
+from efficientdet.dataset.transforms import Compose, Resize, ToTensor
 
 
 def build_val_transforms(input_size: int):
@@ -216,7 +216,7 @@ def parse_args():
                    help="held-out test fraction (must match train.py)")
     p.add_argument("--split-seed",  type=int,   default=42,
                    help="split seed (must match train.py)")
-    p.add_argument("--checkpoint",  default="checkpoints/best.pth")
+    p.add_argument("--checkpoint",  default="efficientdet/checkpoints/best.pth")
     p.add_argument("--phi",         type=int,   default=0)
     p.add_argument("--batch-size",  type=int,   default=8)
     p.add_argument("--workers",     type=int,   default=4)
