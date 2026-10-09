@@ -55,4 +55,14 @@ predictions/
 coco_det_results.json
 *.txt
 result.json
-predictions-20260901T180552Z-1-001.zip
+claude_chats/
+
+# Model weights, exports, and anomalib run outputs
+models/
+*.pth
+*.ckpt
+*.zip
+efficientAD/results*/
+
+# Downloaded datasets (e.g. ImageNette for EfficientAd)
+datasets/
